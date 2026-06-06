@@ -1,0 +1,2 @@
+Add a context menu option to boorus allowing you to save your place in a browsable index of thumbnail images.
+Usable for most popular booru and booru forks.
