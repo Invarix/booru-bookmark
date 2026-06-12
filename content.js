@@ -435,7 +435,7 @@
     // The autojump flag tells the destination to scroll to it after restore.
     sessionStorage.setItem("booru_bm_autojump", "1");
 
-    // Use Turbo.visit if available (Danbooru / ATFBooru / e621 use Turbo Drive).
+    // Use Turbo.visit if available
     // This ensures turbo:load fires on the destination, triggering onNavigate
     // and then maybeAutoJump.  Without this, Turbo intercepts location.href
     // assignments and may not fire turbo:load reliably.
@@ -466,7 +466,7 @@
   // Initial load
   onNavigate();
 
-  // Turbo Drive (Danbooru, ATFBooru, e621) fires turbo:load after every
+  // Turbo Drive fires turbo:load after every
   // navigation -- this is the equivalent of DOMContentLoaded for Turbo pages.
   // Without this the content script never re-runs after Turbo swaps the body.
   document.addEventListener("turbo:load", onNavigate);
