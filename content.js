@@ -3,7 +3,10 @@
 (function () {
   "use strict";
 
-  // Booru detection -- only software-specific signals
+  // ── Booru detection ────────────────────────────────────────────────────────
+  // Only software-specific signals. Generic attributes like data-id or class
+  // names like .thumbnail are excluded -- they appear on too many other sites.
+
   function looksLikeBooru() {
     const appName = document.querySelector('meta[name="application-name"]')
                              ?.content?.toLowerCase() || "";
@@ -12,17 +15,26 @@
     const generator = document.querySelector('meta[name="generator"]')
                                ?.content?.toLowerCase() || "";
     if (generator && /shimmie|danbooru|booru/.test(generator)) return true;
+    // [booru] / [booru] / [booru]: body gets class "c-posts" on the posts listing page
     if (document.body?.classList?.contains("c-posts")) return true;
+    // [booru] specific elements
     if (document.querySelector(".shm-thumb, [data-post-id], #shm-tag-list")) return true;
+    // [booru] / [booru]
     if (location.search.includes("page=post") &&
         document.querySelector('span.thumb[id^="s"]')) return true;
+    // Old [booru] themes (e.g. [booru]): bare <a href="/post/view/N"><img>
     for (const a of document.querySelectorAll("a[href] > img"))
-      if (/\/post\/(view|list)\/\d+/i.test(a.parentElement.getAttribute("href"))) return true;
+      if (/\/post\/(view|list)\/\d+/i.test(a.parentElement.getAttribute("href")))
+        return true;
     return false;
   }
 
   if (!looksLikeBooru()) return;
 
+  // Tell the background this tab is a booru so it shows the context menus.
+  // Called immediately and re-called after each navigation and on focus,
+  // so the background service worker always has current tab state even after
+  // being recycled.
   function signalBooru() {
     chrome.runtime.sendMessage({ type: "IS_BOORU" }).catch(() => {});
   }
@@ -31,17 +43,17 @@
   const BOOKMARK_CLASS = "booru-bookmark-active";
   const PULSE_CLASS    = "booru-bookmark-pulse";
   const BM_ATTR        = "data-booru-bm-id";
+  // Keyed by origin only -- survives SPA URL changes and cross-page navigation
   const STORAGE_KEY    = "booru_bm_" + location.origin;
 
-  let _lastTarget  = null;
-  let _mutingObs   = false;
-  // Global cycle index across all stored bookmarks for this site.
-  // Persisted in sessionStorage so cross-page navigation remembers position.
-  let _jumpIndex = parseInt(sessionStorage.getItem("booru_bm_jumpindex") ?? "-1", 10);
+  let _lastTarget    = null;  // set by contextmenu listener, read by GET_TARGET
+  let _mutingObs     = false; // true while we mutate the DOM ourselves
+  let _jumpIndex     = -1;    // current position in the global bookmark list
+  let _pendingJumpId = null;  // post ID to scroll to as soon as it appears in DOM
 
   // ── Storage ────────────────────────────────────────────────────────────────
-  // { postId: pageUrl }  keyed by site origin.
-  // pageUrl is location.href at bookmark time.
+  // Format: { "did:12345": "https://[booru].net/posts?page=2", ... }
+  // Value is location.href at bookmark time for cross-page navigation.
 
   function loadBookmarks() {
     return new Promise(res =>
@@ -55,6 +67,11 @@
   }
 
   // ── Container & ID resolution ──────────────────────────────────────────────
+  // Walk up from any element to find the post card container.
+  //   [booru] / [booru] / [booru]  ->  <article data-id="12345">
+  //   [booru] ([booru])           ->  <li class="shm-thumb" data-post-id="12345">
+  //   [booru]                    ->  <span class="thumb" id="s12345">
+  //   Old [booru] ([booru])     ->  <img> (no wrapper)
 
   function getBestContainer(startEl) {
     let node = startEl;
@@ -198,9 +215,6 @@
     try {
       const stored = await loadBookmarks();
       if (!Object.keys(stored).length) return;
-      // Track which IDs we've already applied this pass so we never
-      // stamp two DOM elements with the same post ID (e.g. an <article>
-      // and a descendant element that also matches the wrapper selector).
       const applied = new Set();
       for (const el of document.querySelectorAll(
         "article, [data-post-id], [data-id], span.thumb, li.thumb, li.shm-thumb"
@@ -209,15 +223,16 @@
         if (id && stored[id] && !el.classList.contains(BOOKMARK_CLASS) && !applied.has(id)) {
           applyBookmark(el, id);
           applied.add(id);
+          checkPendingJump(el, id);
         }
       }
-      // Bare-img fallback: only for imgs with no recognised wrapper ancestor
       for (const img of document.querySelectorAll("img")) {
         if (img.closest("article, [data-post-id], [data-id], span.thumb, li.thumb")) continue;
         const id = getPostId(img);
         if (id && stored[id] && !img.classList.contains(BOOKMARK_CLASS) && !applied.has(id)) {
           applyBookmark(img, id);
           applied.add(id);
+          checkPendingJump(img, id);
         }
       }
     } finally {
@@ -225,97 +240,62 @@
     }
   }
 
-  // ── Jump toast ─────────────────────────────────────────────────────────────
-  // Separate element appended to <html> (not <body>) so booru CSS that sets
-  // overflow/transform/position on body doesn't clip or hide it.
-  // Visible as long as any bookmarks exist for this site.
+  // ── Nav button (jump toast) ────────────────────────────────────────────────
+  // Separate element appended to <html> (not <body>) so booru CSS that clips
+  // body overflow never hides it.  Visible whenever any bookmark exists.
 
   function getJumpToast() {
     let el = document.getElementById("booru-bookmark-jump-toast");
     if (!el) {
       el = document.createElement("div");
       el.id = "booru-bookmark-jump-toast";
-      // Append to <html>, not <body> -- avoids body overflow/stacking clipping
       document.documentElement.appendChild(el);
       el.addEventListener("click", () => jumpToBookmark());
     }
     return el;
   }
 
-  function showJumpToast() {
-    getJumpToast().classList.add("visible");
-  }
+  function showJumpToast()             { getJumpToast().classList.add("visible"); }
+  function hideJumpToast()             { document.getElementById("booru-bookmark-jump-toast")?.classList.remove("visible"); }
+  function updateJumpToastLabel(count) { getJumpToast().textContent = `Navigate Bookmarks [${count}]`; }
 
-  function updateJumpToastLabel(count) {
-    getJumpToast().textContent = `Navigate Bookmarks [${count}]`;
-  }
-
-  function hideJumpToast() {
-    document.getElementById("booru-bookmark-jump-toast")?.classList.remove("visible");
-  }
-
-  // Show the nav button if any bookmarks exist for this site.
-  // Always uses the storage count -- the single source of truth.
-  // DOM element count is unreliable (duplicates, not-yet-rendered, etc.)
   async function refreshJumpToast() {
     const stored = await loadBookmarks();
     const total  = Object.keys(stored).length;
-    if (total === 0) {
-      hideJumpToast();
-      return;
-    }
+    if (total === 0) { hideJumpToast(); return; }
     updateJumpToastLabel(total);
     showJumpToast();
   }
 
-  // ── Auto-jump after cross-page navigation ──────────────────────────────────
-  // When jumpToBookmark navigates to a different page, sessionStorage carries
-  // a flag telling the new page to scroll to the bookmark once it's in the DOM.
-  // We retry up to 8 times to handle slow async thumbnail rendering.
-  // We never navigate again from here -- that's what caused the redirect loop.
+  // ── Pending jump ───────────────────────────────────────────────────────────
+  // When navigating to a bookmark's page, arm _pendingJumpId with the target
+  // post ID.  runRestore calls checkPendingJump after each applyBookmark, so
+  // the scroll fires the instant the element appears -- no fixed timeout needed.
 
-  async function maybeAutoJump() {
+  function checkPendingJump(container, id) {
+    if (!_pendingJumpId || id !== _pendingJumpId) return;
+    _pendingJumpId = null;
+    if (!isDeleted(container)) {
+      scrollToBookmark(container);
+    } else {
+      highlightNearest(container);
+    }
+  }
+
+  function maybeAutoJump() {
     if (!sessionStorage.getItem("booru_bm_autojump")) return;
     sessionStorage.removeItem("booru_bm_autojump");
-
-    // Restore _jumpIndex from sessionStorage -- the in-memory variable resets
-    // to -1 on every page load, so the saved index must be explicitly restored.
     const savedIdx = sessionStorage.getItem("booru_bm_jumpindex");
     if (savedIdx !== null) {
       _jumpIndex = parseInt(savedIdx, 10);
       sessionStorage.removeItem("booru_bm_jumpindex");
     }
-
-    const stored  = await loadBookmarks();
-    const entries = Object.entries(stored);
-    if (!entries.length) return;
-
-    // Clamp index in case bookmarks were removed while navigating
-    const idx = Math.max(0, Math.min(_jumpIndex, entries.length - 1));
-    const [postId] = entries[idx];
-
-    let attempts = 0;
-    function tryScroll() {
-      attempts++;
-      const result = findContainerByPostId(postId);
-
-      if (result && !isDeleted(result.container)) {
-        scrollToBookmark(result.container);
-        return;
-      }
-
-      if (result && isDeleted(result.container)) {
-        highlightNearest(result.container);
-        return;
-      }
-
-      if (attempts < 8) {
-        setTimeout(tryScroll, 350);
-      }
-      // Give up silently -- nav button still visible for manual retry
-    }
-
-    setTimeout(tryScroll, 300);
+    loadBookmarks().then(stored => {
+      const entries = Object.entries(stored);
+      if (!entries.length) return;
+      const idx = Math.max(0, Math.min(_jumpIndex, entries.length - 1));
+      _pendingJumpId = entries[idx][0];
+    });
   }
 
   // ── Deleted-post detection ─────────────────────────────────────────────────
@@ -331,7 +311,7 @@
     return false;
   }
 
-  // ── Scroll helper ──────────────────────────────────────────────────────────
+  // ── Scroll helpers ─────────────────────────────────────────────────────────
 
   function scrollToBookmark(target) {
     target.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -340,37 +320,22 @@
     target.classList.add(PULSE_CLASS);
     target.addEventListener("animationend",
       () => target.classList.remove(PULSE_CLASS), { once: true });
-    // Nav button count stays as-is (refreshJumpToast owns it)
   }
 
-  // ── Nearest-thumbnail highlight ────────────────────────────────────────────
-  // When a bookmarked post is deleted, find the thumbnail immediately after it
-  // in DOM order (or before it if it was the last one) and pulse it so the
-  // user knows roughly where they left off.
-
   function highlightNearest(deletedContainer) {
-    // Collect all thumbnail containers on the page in DOM order
     const all = Array.from(document.querySelectorAll(
       "article, [data-post-id], [data-id], span.thumb, li.thumb, li.shm-thumb, a[href] > img"
     ));
-
     if (!all.length) return;
-
-    // Find the index of the deleted container within all thumbnails
     let idx = all.indexOf(deletedContainer);
     if (idx === -1) {
-      // Deleted container not in the list -- find the closest by DOM position
       idx = all.findIndex(el =>
-        el.compareDocumentPosition(deletedContainer) &
-        Node.DOCUMENT_POSITION_FOLLOWING
+        el.compareDocumentPosition(deletedContainer) & Node.DOCUMENT_POSITION_FOLLOWING
       );
       if (idx === -1) idx = all.length - 1;
     }
-
-    // Try the next thumbnail; fall back to previous if at the end
     const candidate = all[idx + 1] || all[idx - 1] || all[0];
     if (!candidate) return;
-
     candidate.scrollIntoView({ behavior: "smooth", block: "center" });
     candidate.classList.remove(PULSE_CLASS);
     void candidate.offsetWidth;
@@ -380,117 +345,85 @@
   }
 
   // ── Jump to bookmark ───────────────────────────────────────────────────────
-  // Cycles through ALL stored bookmarks for this site in insertion order,
-  // across pages.  _jumpIndex is the position in the global stored list.
-  //
-  // If the next bookmark is on the current page: scroll to it.
-  // If it is on a different page: navigate there (autojump flag carries us).
 
   async function jumpToBookmark() {
     const stored  = await loadBookmarks();
-    const entries = Object.entries(stored); // [ [postId, pageUrl], ... ]
-
+    const entries = Object.entries(stored);
     if (!entries.length) {
       showToast("No bookmarks saved for this site", "info");
       return;
     }
 
-    // Advance global index, wrapping around the full list
     _jumpIndex = (_jumpIndex + 1) % entries.length;
     sessionStorage.setItem("booru_bm_jumpindex", String(_jumpIndex));
 
     const [postId, pageUrl] = entries[_jumpIndex];
 
-    // Check if this bookmark's page matches the current page
+    // Check whether this bookmark lives on the current page
     let onThisPage = false;
     if (pageUrl && typeof pageUrl === "string") {
-      const target  = new URL(pageUrl);
-      const current = new URL(location.href);
-      onThisPage = target.origin   === current.origin &&
-                   target.pathname === current.pathname &&
-                   target.search   === current.search;
+      try {
+        const target  = new URL(pageUrl);
+        const current = new URL(location.href);
+        onThisPage = target.origin   === current.origin &&
+                     target.pathname === current.pathname &&
+                     target.search   === current.search;
+      } catch (_) { onThisPage = true; }
     } else {
-      // Legacy entry (stored as `true` before schema upgrade) -- assume current page
-      onThisPage = true;
+      onThisPage = true; // legacy entry
     }
 
     if (onThisPage) {
-      // Try to find and scroll to the bookmark in the current DOM
       const result = findContainerByPostId(postId);
       if (result && !isDeleted(result.container)) {
         scrollToBookmark(result.container);
-        return;
-      }
-      // On the right page but element not found or deleted -- highlight nearest
-      if (result) {
+      } else if (result) {
         highlightNearest(result.container);
       } else {
-        // DOM doesn't have it yet (async render) -- pulse a generic message
-        showToast("Bookmark loading...", "info");
+        showToast("Bookmark is loading...", "info");
       }
       return;
     }
 
-    // Bookmark is on a different page -- navigate there.
-    // The autojump flag tells the destination to scroll to it after restore.
+    // Navigate to the page where this bookmark lives
     sessionStorage.setItem("booru_bm_autojump", "1");
-
-    // Use Turbo.visit if available
-    // This ensures turbo:load fires on the destination, triggering onNavigate
-    // and then maybeAutoJump.  Without this, Turbo intercepts location.href
-    // assignments and may not fire turbo:load reliably.
-    if (window.Turbo?.visit) {
-      window.Turbo.visit(pageUrl);
-    } else if (window.Turbolinks?.visit) {
-      window.Turbolinks.visit(pageUrl);
-    } else {
-      location.href = pageUrl;
-    }
+    if (window.Turbo?.visit)        window.Turbo.visit(pageUrl);
+    else if (window.Turbolinks?.visit) window.Turbolinks.visit(pageUrl);
+    else                            location.href = pageUrl;
   }
 
   // ── Initialise ────────────────────────────────────────────────────────────
 
-  // onNavigate is called after every navigation -- real page load, Turbo Drive
-  // swap, or browser back/forward.  It re-runs restore, refreshes the jump
-  // toast count, and fires the autojump if the flag is set.
-  function onNavigate() {
-    // Re-observe body in case Turbo replaced it entirely
-    observeBody();
-    runRestore().then(() => {
-      signalBooru();
-      refreshJumpToast();
-      maybeAutoJump();
-    });
-  }
+  runRestore().then(() => {
+    refreshJumpToast();
+    maybeAutoJump();
+  });
 
-  // Initial load
-  onNavigate();
+  // MutationObserver: re-apply bookmarks when new thumbnails appear
+  new MutationObserver(scheduleRestore).observe(document.body, {
+    childList: true, subtree: true,
+  });
 
-  // Turbo Drive fires turbo:load after every
-  // navigation -- this is the equivalent of DOMContentLoaded for Turbo pages.
-  // Without this the content script never re-runs after Turbo swaps the body.
-  document.addEventListener("turbo:load", onNavigate);
+  // Turbo Drive ([booru], [booru]): fires after every Turbo navigation.
+  // [booru] does NOT use Turbo, but [booru] does, so we listen for both.
+  document.addEventListener("turbo:load", () => {
+    runRestore().then(() => { signalBooru(); refreshJumpToast(); maybeAutoJump(); });
+  });
+  document.addEventListener("turbolinks:load", () => {
+    runRestore().then(() => { signalBooru(); refreshJumpToast(); maybeAutoJump(); });
+  });
 
-  // Turbolinks (older Danbooru forks) uses a different event name
-  document.addEventListener("turbolinks:load", onNavigate);
-
-  // Browser back/forward on any site
-  window.addEventListener("popstate", onNavigate);
-
-  // MutationObserver for dynamic content (infinite scroll, lazy load etc.)
-  let _bodyObserver = null;
-  function observeBody() {
-    if (_bodyObserver) _bodyObserver.disconnect();
-    _bodyObserver = new MutationObserver(scheduleRestore);
-    _bodyObserver.observe(document.body, { childList: true, subtree: true });
-  }
-  observeBody();
-
+  // Heartbeat: keeps service worker tab state alive and re-applies borders
+  // after PC wake from sleep or Chrome tab unfreeze.
   setInterval(() => { signalBooru(); scheduleRestore(); }, 10_000);
+
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") { signalBooru(); scheduleRestore(); }
   });
   window.addEventListener("focus", () => { signalBooru(); scheduleRestore(); });
+  window.addEventListener("popstate", () => {
+    runRestore().then(() => { signalBooru(); refreshJumpToast(); maybeAutoJump(); });
+  });
 
   // ── Context-menu capture ───────────────────────────────────────────────────
 
@@ -504,19 +437,19 @@
   // ── Regular toast ─────────────────────────────────────────────────────────
 
   function showToast(msg, type = "info") {
-    let toast = document.getElementById("booru-bookmark-toast");
-    if (!toast) {
-      toast = document.createElement("div");
-      toast.id = "booru-bookmark-toast";
-      document.documentElement.appendChild(toast);
+    let el = document.getElementById("booru-bookmark-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "booru-bookmark-toast";
+      document.documentElement.appendChild(el);
     }
-    toast.textContent = msg;
-    toast.className = "";
-    void toast.offsetWidth;
-    toast.className = "booru-bookmark-toast-show " + type;
-    clearTimeout(toast._timer);
-    toast.onclick = null;
-    toast._timer = setTimeout(() => { toast.className = ""; }, 2400);
+    el.textContent = msg;
+    el.className   = "";
+    void el.offsetWidth;
+    el.className   = "booru-bookmark-toast-show " + type;
+    clearTimeout(el._timer);
+    el.onclick = null;
+    el._timer  = setTimeout(() => { el.className = ""; }, 2400);
   }
 
   // ── Message listener ───────────────────────────────────────────────────────
