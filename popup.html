@@ -151,6 +151,21 @@
       color: var(--text);
     }
 
+    button.jump {
+      background: transparent;
+      color: #a0a0ff;
+      border-color: rgba(100,100,200,0.4);
+    }
+    button.jump:hover {
+      background: rgba(100,100,200,0.12);
+      border-color: #a0a0ff;
+      color: #c0c0ff;
+    }
+    button.jump:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
     /* ── Footer ─────────────────────────────────────────────────────────── */
     footer {
       padding: 8px 14px;
@@ -189,8 +204,11 @@
   </div>
 
   <div class="actions">
+    <button class="jump" id="btn-jump">
+      <span>🔍</span> Go to bookmark
+    </button>
     <button class="danger" id="btn-clear-page">
-      <span>🗑</span> Clear bookmarks on this page
+      <span>🗑</span> Clear bookmarks for this site
     </button>
     <button class="neutral" id="btn-clear-all">
       <span>✖</span> Clear ALL stored bookmarks

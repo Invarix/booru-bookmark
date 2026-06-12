@@ -8,10 +8,12 @@ const STORAGE_PFX = "booru_bm_";
   const siteNameEl = document.getElementById("site-name");
   const bmCountEl  = document.getElementById("bm-count");
   const emptyEl    = document.getElementById("empty-state");
+  const btnJump    = document.getElementById("btn-jump");
 
   if (!tab?.url) {
     siteNameEl.textContent = "No active tab";
     bmCountEl.textContent  = "0";
+    btnJump.disabled = true;
     return;
   }
 
@@ -20,14 +22,23 @@ const STORAGE_PFX = "booru_bm_";
 
   siteNameEl.textContent = url.hostname.replace(/^www\./, "");
 
-  // Storage is now keyed by origin only (matching the new content.js schema).
   const storageKey = STORAGE_PFX + url.origin;
   const data       = await chrome.storage.local.get(storageKey);
   const stored     = data[storageKey] || {};
   const count      = Object.keys(stored).length;
 
   bmCountEl.textContent = count;
-  if (count === 0) emptyEl.style.display = "flex";
+  if (count === 0) {
+    emptyEl.style.display = "flex";
+    btnJump.disabled = true;
+  }
+
+  // Jump to bookmark -- sends message to content script then closes popup
+  // so the user can see the page scroll to the bookmarked thumbnail.
+  btnJump.addEventListener("click", () => {
+    chrome.tabs.sendMessage(tab.id, { type: "JUMP_TO_BOOKMARK" }).catch(() => {});
+    window.close();
+  });
 
   // Clear this site's bookmarks
   document.getElementById("btn-clear-page").addEventListener("click", async () => {
@@ -35,6 +46,7 @@ const STORAGE_PFX = "booru_bm_";
     chrome.tabs.sendMessage(tab.id, { type: "CLEAR_ALL" }).catch(() => {});
     bmCountEl.textContent = "0";
     emptyEl.style.display = "flex";
+    btnJump.disabled = true;
   });
 
   // Clear ALL bookmarks across every booru site
@@ -45,5 +57,6 @@ const STORAGE_PFX = "booru_bm_";
     chrome.tabs.sendMessage(tab.id, { type: "CLEAR_ALL" }).catch(() => {});
     bmCountEl.textContent = "0";
     emptyEl.style.display = "flex";
+    btnJump.disabled = true;
   });
 })();
