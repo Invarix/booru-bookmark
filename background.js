@@ -6,11 +6,13 @@ const MENU_JUMP       = "booru_bookmark_jump";
 const MENU_CLEAR_ALL  = "booru_bookmark_clear_all";
 const BOORU_TABS_KEY  = "booru_active_tabs";
 
-chrome.runtime.onInstalled.addListener(buildMenus);
-chrome.runtime.onStartup.addListener(buildMenus);
+let _buildingMenus = false;
 
 function buildMenus() {
+  if (_buildingMenus) return;
+  _buildingMenus = true;
   chrome.contextMenus.removeAll(() => {
+    _buildingMenus = false;
     const base = { contexts: ["image", "link", "video"], visible: false };
     chrome.contextMenus.create({ ...base, id: MENU_BOOKMARK,   title: "📌 Bookmark Image" });
     chrome.contextMenus.create({ ...base, id: MENU_UNBOOKMARK, title: "✖ Remove Bookmark" });
@@ -19,6 +21,9 @@ function buildMenus() {
     chrome.contextMenus.create({ ...base, id: MENU_CLEAR_ALL,  title: "🗑 Clear All Bookmarks on This Page" });
   });
 }
+
+chrome.runtime.onInstalled.addListener(buildMenus);
+chrome.runtime.onStartup.addListener(buildMenus);
 
 function setMenusVisible(visible) {
   const upd = { visible };
@@ -32,13 +37,6 @@ async function getBooruTabs() {
 }
 async function saveBooruTabs(set) {
   await chrome.storage.local.set({ [BOORU_TABS_KEY]: [...set] });
-}
-
-async function syncMenusForActiveTab() {
-  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!activeTab) return;
-  const booruTabs = await getBooruTabs();
-  setMenusVisible(booruTabs.has(activeTab.id));
 }
 
 chrome.runtime.onMessage.addListener((msg, sender) => {
@@ -68,11 +66,8 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   if (booruTabs.has(tabId)) { booruTabs.delete(tabId); await saveBooruTabs(booruTabs); }
 });
 
-chrome.runtime.onStartup.addListener(syncMenusForActiveTab);
-
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return;
-
   const actions = {
     [MENU_BOOKMARK]:   "BOOKMARK",
     [MENU_UNBOOKMARK]: "UNBOOKMARK",
@@ -85,7 +80,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const booruTabs = await getBooruTabs();
   if (!booruTabs.has(tab.id)) return;
 
-  // Jump and Clear don't need a resolved target
   if (action === "JUMP_TO_BOOKMARK" || action === "CLEAR_ALL") {
     chrome.tabs.sendMessage(tab.id, { type: action }).catch(console.warn);
     return;
@@ -95,7 +89,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     resolvedTarget = await chrome.tabs.sendMessage(tab.id, { type: "GET_TARGET" });
   } catch (_) { return; }
-
   if (!resolvedTarget) return;
 
   chrome.tabs.sendMessage(tab.id, {
