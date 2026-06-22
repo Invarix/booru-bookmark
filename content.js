@@ -7,7 +7,38 @@
   // chrome.runtime is undefined or disconnected. Bail out silently.
   if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) return;
 
+  // Post-link URL patterns shared by every booru running a given engine.
+  // Matching on these covers all sites on that engine -- present and future --
+  // without naming individual boorus. Five engine families cover the vast
+  // majority of boorus in existence:
+  //   Gelbooru family   index.php?page=post&s=view&id=N   (Gelbooru, Safebooru,
+  //                                                         rule34.xxx, booru.org)
+  //   Danbooru family   /posts/N                          (Danbooru, e621, ATF)
+  //   Shimmie2          /post/view/N                      (paheal, Pixboard)
+  //   Moebooru          /post/show/N                      (yande.re, konachan)
+  //   Philomena         /images/N                         (derpibooru, furbooru)
+  const POST_LINK_PATTERNS = [
+    /[?&]s=view&(amp;)?id=\d+/i,   // Gelbooru-family (also matches s=view&amp;id=)
+    /[?&]id=\d+/i,                  // Gelbooru-family loose (id param on a post link)
+    /\/posts?\/\d+/i,               // Danbooru-family /posts/N (and /post/N)
+    /\/post\/view\/\d+/i,           // Shimmie2
+    /\/post\/show\/\d+/i,           // Moebooru
+    /\/images\/\d+/i,               // Philomena
+  ];
+
+  // Returns true if an <a href> looks like a booru post permalink.
+  function isPostLink(href) {
+    if (!href) return false;
+    // Gelbooru post links must also be on a post page (page=post), to avoid
+    // matching unrelated ?id= links elsewhere on a site.
+    if (/[?&]id=\d+/i.test(href) && !/[?&]s=view/i.test(href)) {
+      return /page=post/i.test(href);
+    }
+    return POST_LINK_PATTERNS.some(re => re.test(href));
+  }
+
   function looksLikeBooru() {
+    // 1. Engine identity in meta tags (fast path for engines that set them)
     const appName = document.querySelector('meta[name="application-name"]')
                              ?.content?.toLowerCase() || "";
     if (appName && /danbooru|booru|shimmie|gelbooru|moebooru|szurubooru|philomena/.test(appName))
@@ -15,13 +46,24 @@
     const generator = document.querySelector('meta[name="generator"]')
                                ?.content?.toLowerCase() || "";
     if (generator && /shimmie|danbooru|booru/.test(generator)) return true;
+
+    // 2. Danbooru body class
     if (document.body?.classList?.contains("c-posts")) return true;
+
+    // 3. Engine-specific markers
     if (document.querySelector(".shm-thumb, [data-post-id], #shm-tag-list")) return true;
-    if (location.search.includes("page=post") &&
-        document.querySelector('span.thumb[id^="s"]')) return true;
-    for (const a of document.querySelectorAll("a[href] > img"))
-      if (/\/post\/(view|list)\/\d+/i.test(a.parentElement.getAttribute("href")))
-        return true;
+
+    // 4. Universal: a cluster of thumbnail links matching a known post-link
+    //    pattern. This is the catch-all that covers Gelbooru/booru.org sites,
+    //    Moebooru, Philomena, and any engine whose thumbnails are <a><img>.
+    //    Require at least 3 such links so a single stray link doesn't trigger.
+    let postLinkCount = 0;
+    for (const a of document.querySelectorAll("a[href] > img, a[href] img")) {
+      if (isPostLink(a.closest("a[href]")?.getAttribute("href"))) {
+        if (++postLinkCount >= 3) return true;
+      }
+    }
+
     return false;
   }
 
@@ -149,48 +191,143 @@
     });
   }
 
+  // One-time migration: older versions stored the same post under different key
+  // formats (did:N, pid:N, eid:N, or href:...id=N) depending on render timing,
+  // which could leave a single post recorded as two separate bookmarks. Collapse
+  // any legacy numeric-bearing key into the canonical "num:N" form and merge
+  // duplicates, keeping the entry that has the most complete value.
+  function migrateBookmarkKeys(stored) {
+    let changed = false;
+    const out = {};
+
+    const numFromKey = (key) => {
+      let m;
+      if ((m = key.match(/^num:(\d+)$/)))                 return m[1];
+      if ((m = key.match(/^(?:did|pid|eid):(\d+)$/)))     return m[1];
+      if ((m = key.match(/[?&]id=(\d+)/)))                return m[1]; // href:...&id=N
+      if ((m = key.match(/\/posts?\/(\d+)/)))             return m[1];
+      if ((m = key.match(/\/post\/(?:view|show)\/(\d+)/))) return m[1];
+      if ((m = key.match(/\/images\/(\d+)/)))             return m[1];
+      return null;
+    };
+
+    const valueRichness = (v) => {
+      if (v && typeof v === "object") return (v.page ? 1 : 0) + (v.post ? 1 : 0);
+      if (typeof v === "string") return 0.5;
+      return 0;
+    };
+
+    for (const [key, val] of Object.entries(stored)) {
+      const num = numFromKey(key);
+      const canonical = num ? "num:" + num : key;
+      if (canonical !== key) changed = true;
+
+      if (!(canonical in out)) {
+        out[canonical] = val;
+      } else {
+        // Duplicate -- keep the richer value (one with page + post info)
+        if (valueRichness(val) > valueRichness(out[canonical])) out[canonical] = val;
+        changed = true;
+      }
+    }
+    return { migrated: out, changed };
+  }
+
   // ── Container & ID resolution ──────────────────────────────────────────────
+
+  // A real thumbnail wrapper holds exactly one post image. A page-level
+  // container (post list, content column) holds many. Rejecting any candidate
+  // with more than one <img> prevents the border from landing on a huge
+  // ancestor and wrapping the whole index.
+  function isSinglePostWrapper(node) {
+    if (!node || !node.querySelectorAll) return true; // an <img> itself has none
+    return node.querySelectorAll("img").length <= 1;
+  }
+
+  // True only for elements that are genuine single-post thumbnail wrappers,
+  // never page-level containers. Used by every code path that applies or
+  // searches for a bookmark so the border can only ever land on a thumbnail.
+  function isThumbWrapper(node) {
+    if (!node) return false;
+    const tag = node.tagName?.toLowerCase();
+    const cls = node.classList;
+    const ds  = node.dataset;
+    const numericDataId =
+      (ds?.postId && /^\d+$/.test(ds.postId)) ||
+      (ds?.id     && /^\d+$/.test(ds.id));
+    const matches =
+      tag === "article"                          ||
+      numericDataId                              ||
+      (tag === "span" && cls?.contains("thumb")) ||
+      (tag === "li"   && (cls?.contains("thumb") || cls?.contains("shm-thumb"))) ||
+      cls?.contains("shm-thumb")                ||
+      cls?.contains("post-preview")             ||
+      cls?.contains("thumbnail-preview");
+    return matches && isSinglePostWrapper(node);
+  }
 
   function getBestContainer(startEl) {
     let node = startEl;
     for (let i = 0; i < 12; i++) {
       if (!node || node === document.body) break;
       if (node.hasAttribute(BM_ATTR)) return node;
-      const tag = node.tagName?.toLowerCase();
-      const cls = node.classList;
-      const ds  = node.dataset;
-      if (
-        tag === "article"                          ||
-        ds?.postId                                 ||
-        ds?.id                                     ||
-        (tag === "span" && cls?.contains("thumb")) ||
-        cls?.contains("shm-thumb")                ||
-        cls?.contains("post-preview")             ||
-        cls?.contains("image-container")          ||
-        cls?.contains("preview-container")
-      ) return node;
+      if (isThumbWrapper(node)) return node;
       node = node.parentElement;
     }
+    // No recognised wrapper -- fall back to the <img> itself (bare-img boorus).
     const img = startEl.tagName?.toLowerCase() === "img"
       ? startEl : startEl.closest?.("img");
     return img || startEl.parentElement || startEl;
   }
 
   function getPostId(container) {
-    if (container.dataset?.postId) return "pid:" + container.dataset.postId;
-    if (container.dataset?.id)     return "did:" + container.dataset.id;
+    // Pull a stable numeric post id out of a post-link href, covering all
+    // engine families so the same post always maps to the same storage key.
+    const idFromHref = (href) => {
+      if (!href) return null;
+      let m;
+      if ((m = href.match(/[?&]id=(\d+)/i)))        return m[1]; // Gelbooru
+      if ((m = href.match(/\/posts?\/(\d+)/i)))     return m[1]; // Danbooru
+      if ((m = href.match(/\/post\/view\/(\d+)/i))) return m[1]; // Shimmie2
+      if ((m = href.match(/\/post\/show\/(\d+)/i))) return m[1]; // Moebooru
+      if ((m = href.match(/\/images\/(\d+)/i)))     return m[1]; // Philomena
+      return null;
+    };
+
+    // Canonical key: the numeric post ID, normalised to "num:N" no matter which
+    // source it came from. This is CRITICAL -- on some boorus the same post can
+    // be identified via data-id, an element id, OR its link href depending on
+    // render timing (e.g. deferred loaders that add data-id late). If those
+    // produced different keys, one post could be stored as two bookmarks.
+    // Collapsing every numeric source to "num:N" guarantees one post = one key.
+
+    // 1. data-* numeric attributes
+    const dataNum = container.dataset?.postId || container.dataset?.id;
+    if (dataNum && /^\d+$/.test(dataNum)) return "num:" + dataNum;
+
+    // 2. element id like "p12345" / "post_12345" / "12345"
     if (container.id) {
-      const m = container.id.match(/^[a-z]?(\d+)$/i);
-      if (m) return "eid:" + m[1];
+      const m = container.id.match(/^[a-z_]*?(\d+)$/i);
+      if (m) return "num:" + m[1];
     }
+
+    // 3. post-link href (covers bare <a><img> boorus and as a fallback)
     if (container.tagName?.toLowerCase() === "img") {
-      const link = container.closest("a[href]");
-      if (link) return "href:" + link.getAttribute("href");
+      const href = container.closest("a[href]")?.getAttribute("href");
+      const n = idFromHref(href);
+      if (n) return "num:" + n;
       const src = container.src || container.currentSrc;
       if (src && !src.startsWith("data:")) return "src:" + src;
+      return null;
     }
-    const href = container.querySelector("a[href]")?.getAttribute("href");
-    if (href) return "href:" + href;
+    const innerHref = container.querySelector("a[href]")?.getAttribute("href");
+    const n = idFromHref(innerHref);
+    if (n) return "num:" + n;
+
+    // 4. Non-numeric fallbacks (rare engines) -- keep stable per-post
+    if (container.dataset?.postId) return "pid:" + container.dataset.postId;
+    if (container.dataset?.id)     return "did:" + container.dataset.id;
+    if (innerHref)                 return "href:" + innerHref;
     return null;
   }
 
@@ -236,6 +373,7 @@
     for (const el of document.querySelectorAll(
       "article, [data-post-id], [data-id], span.thumb, li.thumb, li.shm-thumb"
     )) {
+      if (!isThumbWrapper(el)) continue; // skip page-level containers
       if (getPostId(el) === postId) return { container: el, id: postId };
     }
     for (const img of document.querySelectorAll("img")) {
@@ -276,6 +414,13 @@
       container.addEventListener("animationend",
         () => container.classList.remove(PULSE_CLASS), { once: true });
       const tag = container.tagName?.toLowerCase();
+      if (tag === "img") {
+        // Only <img> containers need display/position overrides for the outline
+        // to render. Tagging them separately keeps us from touching the layout
+        // of the booru's own wrapper elements (span.thumb, article, li), which
+        // would break the page's grid (e.g. collapse it to one column).
+        container.classList.add("booru-bookmark-img");
+      }
       if (tag !== "img" && !container.querySelector(".booru-bookmark-label")) {
         const label       = document.createElement("span");
         label.className   = "booru-bookmark-label";
@@ -293,7 +438,7 @@
   function removeBookmark(container) {
     _mutingObs = true;
     try {
-      container.classList.remove(BOOKMARK_CLASS, PULSE_CLASS);
+      container.classList.remove(BOOKMARK_CLASS, PULSE_CLASS, "booru-bookmark-img");
       container.removeAttribute(BM_ATTR);
       container.querySelector(".booru-bookmark-label")?.remove();
       if (container.style.position === "relative") container.style.position = "";
@@ -323,6 +468,11 @@
       for (const el of document.querySelectorAll(
         "article, [data-post-id], [data-id], span.thumb, li.thumb, li.shm-thumb"
       )) {
+        // Only apply to genuine single-post thumbnail wrappers. Page-level
+        // containers can carry a data-id and resolve (via their first inner
+        // post link) to a bookmarked post's ID -- without this guard the border
+        // would wrap the entire index.
+        if (!isThumbWrapper(el)) continue;
         const id = getPostId(el);
         if (id && stored[id] && !el.classList.contains(BOOKMARK_CLASS) && !applied.has(id)) {
           applyBookmark(el, id);
@@ -369,6 +519,30 @@
     if (total === 0) { hideJumpToast(); return; }
     updateJumpToastLabel(total);
     showJumpToast();
+  }
+
+  // Persistent red error toast shown above the nav button when a bookmarked
+  // post can't be located (e.g. deleted from the site). Stays until clicked
+  // or until the user navigates / triggers another successful jump.
+  function getErrorToast() {
+    let el = document.getElementById("booru-bookmark-error-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "booru-bookmark-error-toast";
+      document.documentElement.appendChild(el);
+      el.addEventListener("click", () => hideErrorToast());
+    }
+    if (el.parentElement !== document.documentElement)
+      document.documentElement.appendChild(el);
+    return el;
+  }
+  function showErrorToast(msg) {
+    const el = getErrorToast();
+    el.textContent = msg;
+    el.classList.add("visible");
+  }
+  function hideErrorToast() {
+    document.getElementById("booru-bookmark-error-toast")?.classList.remove("visible");
   }
 
   // ── Pending jump ───────────────────────────────────────────────────────────
@@ -443,6 +617,7 @@
   // ── Scroll helpers ─────────────────────────────────────────────────────────
 
   function scrollToBookmark(target) {
+    hideErrorToast(); // a successful find clears any prior "deleted?" notice
     target.scrollIntoView({ behavior: "smooth", block: "center" });
     target.classList.remove(PULSE_CLASS);
     void target.offsetWidth;
@@ -511,32 +686,36 @@
       return;
     }
 
-    // STEP 2 -- not on this page. If the stored index page is a DIFFERENT page
-    // than where we are, navigate there first; the thumbnail may simply be on
-    // another page of the same listing we already know about.
-    if (pageUrl && typeof pageUrl === "string" && !sameIndexPage(pageUrl)) {
-      sessionStorage.setItem("booru_bm_autojump", "1");
-      navigateTo(pageUrl);
+    // STEP 2 -- not on this page. Search the index to find which page the post
+    // lives on NOW, then navigate straight there. We no longer hop to the
+    // stored page first (which caused a wasted reload when the post had drifted
+    // away from it). The walk starts from whichever page is the better guess:
+    // the page we're currently on, or the page the bookmark was placed on.
+    let walkFromUrl = null;
+    if (sameIndexPage(pageUrl)) {
+      // We're already on the stored listing -- the page may still be rendering
+      // (deferred thumbnails). Give it a brief chance before walking.
+      if (document.readyState !== "complete") {
+        _pendingJumpId = postId;
+        clearTimeout(_pendingTimer);
+        _pendingTimer = setTimeout(() => {
+          if (_pendingJumpId !== postId) return;
+          _pendingJumpId = null;
+          findPostPageAndGo(postId, pageUrl);
+        }, 1000);
+        return;
+      }
+      walkFromUrl = pageUrl;
+    } else {
+      walkFromUrl = sameListing(pageUrl) ? location.href : pageUrl;
+    }
+
+    if (!walkFromUrl) {
+      showToast("No saved location for this bookmark", "info");
       return;
     }
 
-    // STEP 3 -- we're on the stored index page but the post isn't in the DOM.
-    // If the page has already finished loading, the post genuinely isn't here
-    // (it drifted to another page) -- start the page-walk immediately, no wait.
-    // Only if the page is still loading do we briefly wait for it to settle,
-    // and even then checkPendingJump fires the instant the post appears.
-    if (document.readyState === "complete") {
-      findPostPageAndGo(postId, pageUrl);
-      return;
-    }
-
-    _pendingJumpId = postId;
-    clearTimeout(_pendingTimer);
-    _pendingTimer = setTimeout(() => {
-      if (_pendingJumpId !== postId) return; // resolved by runRestore already
-      _pendingJumpId = null;
-      findPostPageAndGo(postId, pageUrl);
-    }, 1000);
+    findPostPageAndGo(postId, walkFromUrl);
   }
 
   // ── Page-walk search ───────────────────────────────────────────────────────
@@ -580,6 +759,7 @@
       for (const el of doc.querySelectorAll(
         "article, [data-post-id], [data-id], span.thumb, li.thumb, li.shm-thumb"
       )) {
+        if (!isThumbWrapper(el)) continue; // skip page-level containers
         if (getPostId(el) === postId) return true;
       }
       // Bare-img boorus
@@ -604,43 +784,67 @@
 
     showToast("Locating bookmark across pages...", "info");
 
-    // Determine the page number the bookmark was originally on
-    let startPage = 1;
-    try {
-      const u = new URL(bookmarkPageUrl, location.origin);
-      const qp = u.searchParams.get("page");
-      if (qp) startPage = parseInt(qp, 10) || 1;
-      else {
+    // Determine the page number to start searching from. Prefer the page the
+    // user is currently on (if it's a valid index page of this listing), since
+    // that's the best guess for proximity; otherwise use the bookmarked page.
+    function pageNumOf(urlStr) {
+      try {
+        const u = new URL(urlStr, location.origin);
+        const qp = u.searchParams.get("page");
+        if (qp) return parseInt(qp, 10) || 1;
         const m = u.pathname.match(/\/(\d+)\/?$/);
-        if (m) startPage = parseInt(m[1], 10) || 1;
-      }
-    } catch (_) {}
-
-    const MAX_PAGES = 50; // safety limit
-
-    // Search order: start page, then forward (drift is usually forward),
-    // interleaving a backward check in case the post moved earlier.
-    const order = [];
-    order.push(startPage);
-    for (let d = 1; d < MAX_PAGES; d++) {
-      if (startPage + d <= MAX_PAGES) order.push(startPage + d);
-      if (startPage - d >= 1)        order.push(startPage - d);
+        if (m) return parseInt(m[1], 10) || 1;
+      } catch (_) {}
+      return 1;
     }
 
-    for (const pageNum of order) {
-      const candidateUrl = buildIndexPageUrl(bookmarkPageUrl, pageNum);
-      const found = await pageContainsPost(candidateUrl, postId);
-      if (found) {
-        // Navigate the user to this index page; autojump will scroll to it.
-        // The walked flag prevents a second page-walk if rendering is slow.
+    let startPage = pageNumOf(bookmarkPageUrl);
+
+    const MAX_PAGES  = 200; // safety ceiling
+    const BATCH_SIZE = 6;   // pages fetched concurrently per batch
+
+    // Build the search order: start page, then expand outward, biased forward
+    // since index drift pushes older posts toward higher page numbers.
+    const order = [startPage];
+    for (let d = 1; d < MAX_PAGES; d++) {
+      if (startPage + d <= MAX_PAGES) order.push(startPage + d);
+      if (startPage - d >= 1)         order.push(startPage - d);
+    }
+
+    // Search in concurrent batches: fetch BATCH_SIZE pages at once, check all,
+    // navigate to the lowest-numbered page that contains the post. This turns
+    // a 7-sequential-fetch wait into roughly one or two round-trips.
+    for (let i = 0; i < order.length; i += BATCH_SIZE) {
+      const batch = order.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(batch.map(async (pageNum) => {
+        const url = buildIndexPageUrl(bookmarkPageUrl, pageNum);
+        const found = await pageContainsPost(url, postId);
+        return { pageNum, url, found };
+      }));
+
+      // Among hits in this batch, pick the one closest to startPage
+      const hits = results.filter(r => r.found);
+      if (hits.length) {
+        hits.sort((a, b) => Math.abs(a.pageNum - startPage) - Math.abs(b.pageNum - startPage));
+        const target = hits[0];
         sessionStorage.setItem("booru_bm_autojump", "1");
         sessionStorage.setItem("booru_bm_walked", "1");
-        navigateTo(candidateUrl);
+        navigateTo(target.url);
         return;
       }
     }
 
-    showToast("Bookmarked post not found -- it may have been deleted", "warn");
+    // Search exhausted -- the post is on no index page, so it has been deleted
+    // (or made private/removed). Navigate the user to the bookmark's last known
+    // page so they land where they left off, then show a persistent red toast.
+    sessionStorage.setItem("booru_bm_deleted_notice", "1");
+    if (sameIndexPage(bookmarkPageUrl)) {
+      // Already on the last known page -- just show the notice now.
+      sessionStorage.removeItem("booru_bm_deleted_notice");
+      showErrorToast("Bookmark Not found! Deleted?");
+    } else {
+      navigateTo(buildIndexPageUrl(bookmarkPageUrl, startPage));
+    }
   }
 
   // Navigate using the booru's SPA router if present, else a hard navigation.
@@ -648,6 +852,32 @@
     if (window.Turbo?.visit)           window.Turbo.visit(url);
     else if (window.Turbolinks?.visit) window.Turbolinks.visit(url);
     else                               location.href = url;
+  }
+
+  // True if the given URL is the same listing/search as the current page,
+  // ignoring only the page number. Used to decide whether the current page is a
+  // safe origin to walk from (same tags, just a different page).
+  function sameListing(pageUrl) {
+    try {
+      const target  = new URL(pageUrl, location.origin);
+      const current = new URL(location.href);
+      if (target.origin !== current.origin) return false;
+
+      // Strip the page marker from both, then compare what remains.
+      const strip = (u) => {
+        const c = new URL(u.href);
+        c.searchParams.delete("page");
+        c.searchParams.delete("pid"); // Gelbooru-family uses pid offset
+        // Path-based page number (/list/N)
+        c.pathname = c.pathname.replace(/\/\d+\/?$/, "/");
+        // Normalise param order for stable comparison
+        c.searchParams.sort();
+        return c.pathname + "?" + c.searchParams.toString();
+      };
+      return strip(target) === strip(current);
+    } catch (_) {
+      return false;
+    }
   }
 
   // True if the given index-page URL refers to the same page we're viewing,
@@ -674,10 +904,28 @@
 
   // ── Initialise ────────────────────────────────────────────────────────────
 
-  runRestore().then(() => {
-    refreshJumpToast();
-    maybeAutoJump();
-  });
+  // If we just navigated to a bookmark's last known page because the post was
+  // determined to be deleted, show the persistent red notice now.
+  function maybeShowDeletedNotice() {
+    if (sessionStorage.getItem("booru_bm_deleted_notice")) {
+      sessionStorage.removeItem("booru_bm_deleted_notice");
+      showErrorToast("Bookmark Not found! Deleted?");
+    }
+  }
+
+  // Run the one-time key migration before anything reads bookmarks, so the
+  // canonical num: keys are in place for restore, jump, and the toast count.
+  (async () => {
+    const stored = await loadBookmarks();
+    const { migrated, changed } = migrateBookmarkKeys(stored);
+    if (changed) await saveBookmarks(migrated);
+
+    runRestore().then(() => {
+      refreshJumpToast();
+      maybeAutoJump();
+      maybeShowDeletedNotice();
+    });
+  })();
 
   // MutationObserver: re-apply bookmarks when new thumbnails appear.
   // When a bookmarked node is removed (booru replaces it), detect it

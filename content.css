@@ -35,7 +35,12 @@
     0 0 0 13px  rgba(255, 80, 80, 0.45),
     0 0 22px 6px rgba(255, 20, 20, 0.55) !important;
   z-index: 3 !important;
-  /* <img> elements are inline by default; outline only renders on block/inline-block */
+}
+
+/* Display/position overrides apply ONLY to bare <img> containers. The booru's
+   own wrapper elements (span.thumb, article, li) keep their native layout so
+   the page grid is never disturbed. */
+.booru-bookmark-active.booru-bookmark-img {
   display: inline-block !important;
   position: relative !important;
 }
@@ -134,4 +139,35 @@
 #booru-bookmark-jump-toast:hover {
   background: #24244a !important;
   border-color: rgba(160, 160, 255, 0.5) !important;
+}
+
+/* Persistent error toast -- shown above the Navigate Bookmarks button when a
+   bookmarked post can't be found (e.g. deleted). Red, dismissible by click. */
+#booru-bookmark-error-toast {
+  display: none;
+  position: fixed !important;
+  bottom: 80px !important;
+  right: 28px !important;
+  z-index: 2147483647 !important;
+  padding: 10px 18px !important;
+  border-radius: 8px !important;
+  font-family: system-ui, sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.01em !important;
+  white-space: nowrap !important;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.4) !important;
+  background: #b3140f !important;
+  color: #ffffff !important;
+  border: 1.5px solid rgba(255, 120, 120, 0.6) !important;
+  cursor: pointer !important;
+  pointer-events: auto !important;
+  user-select: none !important;
+}
+#booru-bookmark-error-toast.visible {
+  display: block !important;
+}
+#booru-bookmark-error-toast:hover {
+  background: #cc1812 !important;
+  border-color: rgba(255, 160, 160, 0.8) !important;
 }
