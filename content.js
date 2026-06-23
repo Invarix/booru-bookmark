@@ -94,9 +94,25 @@
   // itself, which is always accurate.
 
   function getTruePageUrl() {
-    // 1. <link rel="canonical"> -- most reliable, many boorus include it
+    // Prefer the live location.href when it's a real listing URL -- it always
+    // reflects the page you're actually on. Some engines (modern Danbooru) set
+    // <link rel="canonical"> to the bare site root on the index, which would
+    // lose the /posts listing path, so we don't trust canonical blindly.
+    const here = (() => { try { return new URL(location.href); } catch { return null; } })();
+    if (here && /\/(post\/list|posts?|index\.php)/i.test(here.pathname + here.search)) {
+      return location.href;
+    }
+
+    // 1. <link rel="canonical"> -- only trust it if it carries a listing path.
     const canonical = document.querySelector('link[rel="canonical"]');
-    if (canonical?.href) return canonical.href;
+    if (canonical?.href) {
+      try {
+        const cu = new URL(canonical.href);
+        if (/\/(post\/list|posts?|index\.php)/i.test(cu.pathname + cu.search)) {
+          return canonical.href;
+        }
+      } catch (_) {}
+    }
 
     // 2. Paginator current page link (e621/Danbooru style)
     //    <span class="page current"> with adjacent <a> links
@@ -728,20 +744,39 @@
   // Handles both ?page=N query style and /list/N path style.
   function buildIndexPageUrl(baseUrl, pageNum) {
     try {
-      const u = new URL(baseUrl, location.origin);
-      // Query-param style: set/replace ?page=N
-      if (u.searchParams.has("page") || /[?&]/.test(u.search) || !/\/\d+\/?$/.test(u.pathname)) {
-        // If the path doesn't already encode the page number, use query param
-        if (/\/(post\/list|posts?)\/?$/i.test(u.pathname) || u.searchParams.has("page")) {
-          u.searchParams.set("page", String(pageNum));
-          return u.toString();
-        }
+      let u = new URL(baseUrl, location.origin);
+
+      // If the base URL has no recognisable listing path (e.g. a bare origin
+      // "https://site/" that a canonical link produced), borrow the listing
+      // path + query from the page we're currently on, which IS a real listing.
+      const hasListing = /\/(post\/list|posts?|index\.php)/i.test(u.pathname + u.search);
+      if (!hasListing) {
+        try {
+          const cur = new URL(location.href);
+          if (/\/(post\/list|posts?|index\.php)/i.test(cur.pathname + cur.search)) {
+            u = cur;
+          }
+        } catch (_) {}
       }
-      // Path style: replace trailing /N with /pageNum, or append /pageNum
+
+      // Query-param pagination (Danbooru family /posts, Gelbooru index.php).
+      // Use this whenever a page param already exists OR the path is a known
+      // query-paginated listing root.
+      if (u.searchParams.has("page") ||
+          /\/(posts?|index\.php)\/?$/i.test(u.pathname) ||
+          /[?&]/.test(u.search)) {
+        u.searchParams.set("page", String(pageNum));
+        return u.toString();
+      }
+
+      // Path-style pagination (Shimmie2 /post/list/N): replace or append /N.
       if (/\/\d+\/?$/.test(u.pathname)) {
         u.pathname = u.pathname.replace(/\/\d+\/?$/, "/" + pageNum);
-      } else {
+      } else if (/\/post\/list\/?$/i.test(u.pathname) || /\/post\/list\//i.test(u.pathname)) {
         u.pathname = u.pathname.replace(/\/?$/, "/" + pageNum);
+      } else {
+        // Unknown shape -- safest is query param, which most engines accept.
+        u.searchParams.set("page", String(pageNum));
       }
       return u.toString();
     } catch (_) {
@@ -751,25 +786,51 @@
 
   // Fetch an index page and return true if the target post ID appears on it.
   async function pageContainsPost(pageUrl, postId) {
+    const info = await fetchPageInfo(pageUrl);
+    return info.ids.includes(postId);
+  }
+
+  // Fetch an index page once and extract: the set of post-ID keys on it, plus
+  // the numeric min/max of those IDs. The numeric range powers a binary search:
+  // boorus order the default index by post ID DESCENDING, so a target ID higher
+  // than a page's max means the post is on an EARLIER page, lower than its min
+  // means a LATER page, and within range means it's on this page.
+  // Returns { ids:[...], maxNum, minNum, count } -- empty page => count 0.
+  async function fetchPageInfo(pageUrl) {
     try {
       const resp = await fetch(pageUrl, { credentials: "include" });
-      if (!resp.ok) return false;
+      if (!resp.ok) return { ids: [], maxNum: null, minNum: null, count: 0 };
       const html = await resp.text();
       const doc  = new DOMParser().parseFromString(html, "text/html");
+
+      const ids = [];
+      const nums = [];
+      const addId = (key) => {
+        if (!key) return;
+        ids.push(key);
+        const m = key.match(/^num:(\d+)$/);
+        if (m) nums.push(parseInt(m[1], 10));
+      };
+
       for (const el of doc.querySelectorAll(
         "article, [data-post-id], [data-id], span.thumb, li.thumb, li.shm-thumb"
       )) {
-        if (!isThumbWrapper(el)) continue; // skip page-level containers
-        if (getPostId(el) === postId) return true;
+        if (!isThumbWrapper(el)) continue;
+        addId(getPostId(el));
       }
-      // Bare-img boorus
       for (const img of doc.querySelectorAll("img")) {
         if (img.closest("article, [data-post-id], [data-id], span.thumb, li.thumb")) continue;
-        if (getPostId(img) === postId) return true;
+        addId(getPostId(img));
       }
-      return false;
+
+      return {
+        ids,
+        maxNum: nums.length ? Math.max(...nums) : null,
+        minNum: nums.length ? Math.min(...nums) : null,
+        count: ids.length,
+      };
     } catch (_) {
-      return false;
+      return { ids: [], maxNum: null, minNum: null, count: 0 };
     }
   }
 
@@ -800,51 +861,125 @@
 
     let startPage = pageNumOf(bookmarkPageUrl);
 
-    const MAX_PAGES  = 200; // safety ceiling
-    const BATCH_SIZE = 6;   // pages fetched concurrently per batch
+    const MAX_PAGES = 5000; // generous ceiling; binary search makes this cheap
 
-    // Build the search order: start page, then expand outward, biased forward
-    // since index drift pushes older posts toward higher page numbers.
-    const order = [startPage];
-    for (let d = 1; d < MAX_PAGES; d++) {
-      if (startPage + d <= MAX_PAGES) order.push(startPage + d);
-      if (startPage - d >= 1)         order.push(startPage - d);
-    }
+    // The target's numeric post ID drives a binary search. Boorus order the
+    // index by post ID descending, so page position is monotonic in ID.
+    const targetNum = (() => {
+      const m = String(postId).match(/^num:(\d+)$/);
+      return m ? parseInt(m[1], 10) : null;
+    })();
 
-    // Search in concurrent batches: fetch BATCH_SIZE pages at once, check all,
-    // navigate to the lowest-numbered page that contains the post. This turns
-    // a 7-sequential-fetch wait into roughly one or two round-trips.
-    for (let i = 0; i < order.length; i += BATCH_SIZE) {
-      const batch = order.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(batch.map(async (pageNum) => {
-        const url = buildIndexPageUrl(bookmarkPageUrl, pageNum);
-        const found = await pageContainsPost(url, postId);
-        return { pageNum, url, found };
-      }));
+    const goToPage = (pageNum) => {
+      sessionStorage.setItem("booru_bm_autojump", "1");
+      sessionStorage.setItem("booru_bm_walked", "1");
+      navigateTo(buildIndexPageUrl(bookmarkPageUrl, pageNum));
+    };
 
-      // Among hits in this batch, pick the one closest to startPage
-      const hits = results.filter(r => r.found);
-      if (hits.length) {
-        hits.sort((a, b) => Math.abs(a.pageNum - startPage) - Math.abs(b.pageNum - startPage));
-        const target = hits[0];
-        sessionStorage.setItem("booru_bm_autojump", "1");
-        sessionStorage.setItem("booru_bm_walked", "1");
-        navigateTo(target.url);
+    const notFound = () => {
+      sessionStorage.setItem("booru_bm_deleted_notice", "1");
+      if (sameIndexPage(bookmarkPageUrl)) {
+        sessionStorage.removeItem("booru_bm_deleted_notice");
+        showErrorToast("Bookmark Not found! Deleted?");
+      } else {
+        navigateTo(buildIndexPageUrl(bookmarkPageUrl, startPage));
+      }
+    };
+
+    // ---- Fast path: binary search by post ID (when we have a numeric ID) ----
+    if (targetNum !== null) {
+      // 1. Find an upper-bound page whose min ID is below the target (target is
+      //    on or before it). Probe exponentially: startPage, *2, *4, ... This
+      //    brackets the target in O(log pages) fetches without knowing the last
+      //    page. Simultaneously catch the post if a probed page contains it.
+      let lo = 1;                       // page known to be at/before target side
+      let hi = null;                    // page known to be at/after target side
+      let probe = Math.max(1, startPage);
+      let step  = Math.max(1, startPage);
+
+      for (let guard = 0; guard < 40 && probe <= MAX_PAGES; guard++) {
+        const probeUrl = buildIndexPageUrl(bookmarkPageUrl, probe);
+        const info = await fetchPageInfo(probeUrl);
+
+        if (info.count === 0) {            // past the last page -> bound above
+          hi = probe;
+          break;
+        }
+        if (info.ids.includes(postId)) { goToPage(probe); return; }
+
+        if (info.minNum === null) {        // page has no numeric IDs -> can't
+          break;                           // binary search; fall back to linear
+        }
+        if (targetNum > info.maxNum) {     // target newer -> earlier page
+          hi = probe;
+          break;
+        }
+        // target older than this page's min -> later page; expand the bracket
+        lo = probe;
+        step *= 2;
+        probe = lo + step;
+      }
+
+      // 2. Binary search between lo (target is at/after) and hi (target before).
+      if (hi !== null) {
+        while (lo + 1 < hi) {
+          const mid  = Math.floor((lo + hi) / 2);
+          const info = await fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, mid));
+
+          if (info.count === 0) { hi = mid; continue; }
+          if (info.ids.includes(postId)) { goToPage(mid); return; }
+          if (info.minNum === null)      { break; } // give up to linear fallback
+
+          if (targetNum > info.maxNum)      hi = mid; // target newer -> earlier
+          else if (targetNum < info.minNum) lo = mid; // target older -> later
+          else break; // in range but not found by exact id -> check lo & hi below
+        }
+
+        // The post should be on lo or hi (adjacent). Check both directly.
+        for (const p of [lo, hi]) {
+          const info = await fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, p));
+          if (info.ids.includes(postId)) { goToPage(p); return; }
+        }
+        notFound();
         return;
       }
+      // If we never bounded above, fall through to the linear scan below.
     }
 
-    // Search exhausted -- the post is on no index page, so it has been deleted
-    // (or made private/removed). Navigate the user to the bookmark's last known
-    // page so they land where they left off, then show a persistent red toast.
-    sessionStorage.setItem("booru_bm_deleted_notice", "1");
-    if (sameIndexPage(bookmarkPageUrl)) {
-      // Already on the last known page -- just show the notice now.
-      sessionStorage.removeItem("booru_bm_deleted_notice");
-      showErrorToast("Bookmark Not found! Deleted?");
-    } else {
-      navigateTo(buildIndexPageUrl(bookmarkPageUrl, startPage));
+    // ---- Fallback: concurrent linear scan (non-numeric IDs / odd engines) ----
+    const onStartPage = sameIndexPage(buildIndexPageUrl(bookmarkPageUrl, startPage));
+    const firstProbe  = onStartPage ? startPage + 1 : startPage;
+    const LINEAR_MAX  = 300;
+    const BATCH_SIZE  = 6;
+
+    const order = [firstProbe];
+    for (let d = 1; d < LINEAR_MAX; d++) {
+      if (firstProbe + d <= LINEAR_MAX) order.push(firstProbe + d);
+      if (firstProbe - d >= 1)          order.push(firstProbe - d);
     }
+
+    let navigated = false;
+    for (let i = 0; i < order.length && !navigated; i += BATCH_SIZE) {
+      const batch = order.slice(i, i + BATCH_SIZE);
+      await new Promise((resolveWave) => {
+        let pending = batch.length;
+        for (const pageNum of batch) {
+          const url = buildIndexPageUrl(bookmarkPageUrl, pageNum);
+          pageContainsPost(url, postId).then((found) => {
+            if (found && !navigated) {
+              navigated = true;
+              goToPage(pageNum);
+              resolveWave();
+              return;
+            }
+            if (--pending === 0) resolveWave();
+          }).catch(() => { if (--pending === 0) resolveWave(); });
+        }
+      });
+    }
+    if (navigated) return;
+
+    notFound();
   }
 
   // Navigate using the booru's SPA router if present, else a hard navigation.
