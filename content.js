@@ -13,7 +13,7 @@
   // majority of boorus in existence:
   //   Gelbooru family   index.php?page=post&s=view&id=N   (Gelbooru, Safebooru,
   //                                                         rule34.xxx, booru.org)
-  //   Danbooru family   /posts/N                          (Danbooru, e621, ATF)
+  //   Danbooru family   /posts/N                          (Danbooru, e621)
   //   Shimmie2          /post/view/N                      (paheal, Pixboard)
   //   Moebooru          /post/show/N                      (yande.re, konachan)
   //   Philomena         /images/N                         (derpibooru, furbooru)
