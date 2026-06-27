@@ -1,20 +1,20 @@
 # Booru Bookmark
 
-A Chromium (Manifest V3) browser extension that lets you bookmark image thumbnails on booru-style image boards with a bright red border — so you always know where you left off, even after a post has drifted to a different index page.
+A Chromium (Manifest V3) browser extension that lets you bookmark image thumbnails on booru-style image boards with a bright red border, so you always know where you left off, even after a post has drifted to a different index page.
 
-Right-click any thumbnail to bookmark it. The thumbnail gets a distinctive red border, your bookmarks persist across sessions, and a one-click "Navigate Bookmarks" button takes you back to a bookmarked image — automatically finding and scrolling to it even if new uploads have pushed it onto a later page.
+Right-click any thumbnail to bookmark it. The thumbnail gets a distinctive red border, your bookmarks persist across sessions, and a one-click "Navigate Bookmarks" button takes you back to a bookmarked image, automatically finding and scrolling to it even if new uploads have pushed it onto a later page.
 
 ---
 
 ## Features
 
 - **One-click bookmarking** via the right-click context menu on any thumbnail.
-- **Persistent visual markers** — bookmarked thumbnails get a thick red border with a contrast halo so they stand out against any thumbnail color.
+- **Persistent visual markers** bookmarked thumbnails get a thick red border with a contrast halo so they stand out against any thumbnail color.
 - **Cross-page navigation** — if a bookmarked post has moved to a different index page since you saved it, the extension locates the page it's on now and takes you there.
-- **Automatic scroll-to-bookmark** — after navigating, the page scrolls to and pulses the bookmarked thumbnail, re-centering as the page finishes loading.
+- **Automatic scroll-to-bookmark** after navigating, the page scrolls to and pulses the bookmarked thumbnail, re-centering as the page finishes loading.
 - **Deleted-post detection** — if a bookmarked post no longer exists anywhere in the index, you're returned to its last known page with a clear notice.
-- **Works on many boorus, not a fixed list** — the extension detects booru sites at runtime by their page structure rather than relying on a hardcoded domain list.
-- **Fully local & private** — all bookmark data is stored on your own device. Nothing is transmitted anywhere.
+- **Works on many boorus, not a fixed list** the extension detects booru sites at runtime by their page structure rather than relying on a hardcoded domain list.
+- **Fully local & private** all bookmark data is stored on your own device. Nothing is transmitted anywhere.
 
 ---
 
@@ -25,7 +25,7 @@ The extension identifies booru sites by detecting the underlying engine, so it w
 | Engine family | Post URL pattern | Example sites |
 | --- | --- | --- |
 | Gelbooru family | `index.php?page=post&s=view&id=N` | Gelbooru, Safebooru, booru.org-hosted sites |
-| Danbooru family | `/posts/N` | Danbooru, e621, ATFBooru |
+| Danbooru family | `/posts/N` | Danbooru, e621 |
 | Shimmie2 | `/post/view/N` | r34 paheal, Pixboard |
 | Moebooru | `/post/show/N` | yande.re, Konachan |
 | Philomena | `/images/N` | Derpibooru, Furbooru |
