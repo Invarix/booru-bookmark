@@ -10,9 +10,9 @@ Right-click any thumbnail to bookmark it. The thumbnail gets a distinctive red b
 
 - **One-click bookmarking** via the right-click context menu on any thumbnail.
 - **Persistent visual markers** bookmarked thumbnails get a thick red border with a contrast halo so they stand out against any thumbnail color.
-- **Cross-page navigation** — if a bookmarked post has moved to a different index page since you saved it, the extension locates the page it's on now and takes you there.
+- **Cross-page navigation** if a bookmarked post has moved to a different index page since you saved it, the extension locates the page it's on now and takes you there.
 - **Automatic scroll-to-bookmark** after navigating, the page scrolls to and pulses the bookmarked thumbnail, re-centering as the page finishes loading.
-- **Deleted-post detection** — if a bookmarked post no longer exists anywhere in the index, you're returned to its last known page with a clear notice.
+- **Deleted-post detection** if a bookmarked post no longer exists anywhere in the index, you're returned to its last known page with a clear notice.
 - **Works on many boorus, not a fixed list** the extension detects booru sites at runtime by their page structure rather than relying on a hardcoded domain list.
 - **Fully local & private** all bookmark data is stored on your own device. Nothing is transmitted anywhere.
 
