@@ -25,7 +25,7 @@ The extension identifies booru sites by detecting the underlying engine, so it w
 | Engine family | Post URL pattern | Example sites |
 | --- | --- | --- |
 | Gelbooru family | `index.php?page=post&s=view&id=N` | Gelbooru, Safebooru, booru.org-hosted sites |
-| Danbooru family | `/posts/N` | Danbooru, e621, ATFBooru |
+| Danbooru family | `/posts/N` | Danbooru, e621 |
 | Shimmie2 | `/post/view/N` | r34 paheal, Pixboard |
 | Moebooru | `/post/show/N` | yande.re, Konachan |
 | Philomena | `/images/N` | Derpibooru, Furbooru |
