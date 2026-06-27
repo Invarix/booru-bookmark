@@ -597,23 +597,53 @@
       if (value && typeof value === "object") pageUrl = value.page || null;
       else if (typeof value === "string")     pageUrl = value;
 
-      // Arm the pending jump -- checkPendingJump fires when runRestore finds it
+      // Actively poll for the post in the DOM rather than passively waiting for
+      // a MutationObserver tick. e621 and other deferred-loading boorus inject
+      // thumbnails over time, so we re-check directly on a short interval until
+      // the post appears (then scroll to it) or we exhaust the window (then walk
+      // pages / report). This eliminates the race where the element rendered
+      // just after a fixed timeout and required a manual second click.
       _pendingJumpId = postId;
       clearTimeout(_pendingTimer);
-      _pendingTimer = setTimeout(() => {
-        if (_pendingJumpId !== postId) return; // already found and scrolled to
-        _pendingJumpId = null;
-        // Guard: if we arrived here from a page-walk that already confirmed
-        // this post is on this page, don't walk again -- avoids any loop.
-        if (sessionStorage.getItem("booru_bm_walked")) {
+
+      let attempts = 0;
+      const MAX_ATTEMPTS = 40;     // 40 * 200ms = up to 8s of polling
+      const tick = () => {
+        if (_pendingJumpId !== postId) return; // resolved elsewhere
+        const result = findContainerByPostId(postId);
+        if (result && !isDeleted(result.container)) {
+          _pendingJumpId = null;
           sessionStorage.removeItem("booru_bm_walked");
-          showToast("Bookmark should be on this page", "info");
+          scrollToBookmark(result.container);
           return;
         }
-        // Landed on the stored page but the post isn't here -- it drifted to
-        // another index page. Walk pages to find where it lives now.
+        if (result && isDeleted(result.container)) {
+          _pendingJumpId = null;
+          sessionStorage.removeItem("booru_bm_walked");
+          highlightNearest(result.container);
+          return;
+        }
+        if (++attempts < MAX_ATTEMPTS) {
+          _pendingTimer = setTimeout(tick, 200);
+          return;
+        }
+        // Window exhausted -- the post genuinely isn't on this page.
+        _pendingJumpId = null;
+        if (sessionStorage.getItem("booru_bm_walked")) {
+          // We already walked here and confirmed the post should be present,
+          // but it never rendered. Do one final restore-driven attempt.
+          sessionStorage.removeItem("booru_bm_walked");
+          runRestore().then(() => {
+            const r = findContainerByPostId(postId);
+            if (r && !isDeleted(r.container)) scrollToBookmark(r.container);
+            else showToast("Bookmark should be on this page", "info");
+          });
+          return;
+        }
+        // Not where we expected -- it drifted to another page. Walk to find it.
         findPostPageAndGo(postId, pageUrl);
-      }, 2000);
+      };
+      tick();
     });
   }
 
@@ -634,7 +664,26 @@
 
   function scrollToBookmark(target) {
     hideErrorToast(); // a successful find clears any prior "deleted?" notice
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    const doScroll = () => target.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    // Scroll immediately, then re-assert after layout settles. On lazy-loading
+    // boorus, thumbnails above the target finish loading and expand AFTER the
+    // first scroll, pushing the target off-centre -- re-centering fixes that.
+    doScroll();
+    requestAnimationFrame(doScroll);          // after the next paint
+    setTimeout(doScroll, 250);                // after early lazy-load shifts
+    setTimeout(doScroll, 600);                // after later shifts settle
+
+    // If the target's own thumbnail image is still loading, re-center once it's
+    // done (its final height may differ from the placeholder).
+    const img = target.tagName?.toLowerCase() === "img"
+      ? target : target.querySelector("img");
+    if (img && !img.complete) {
+      img.addEventListener("load", () => doScroll(), { once: true });
+    }
+
+    // Pulse animation to draw the eye to the bookmark once it's in view.
     target.classList.remove(PULSE_CLASS);
     void target.offsetWidth;
     target.classList.add(PULSE_CLASS);
@@ -834,6 +883,40 @@
     }
   }
 
+  // Concurrent linear sweep over a page range [fromPage, toPage] inclusive,
+  // navigating to the first page found to contain the post. Returns true if it
+  // navigated, false if the post wasn't found in the swept range. Used as a
+  // safety net after binary search (whose ID-monotonic assumption can be
+  // violated by custom sort orders, lazy-loaded fetched markup, or ID gaps).
+  async function linearSweep(postId, bookmarkPageUrl, fromPage, toPage) {
+    const lo = Math.max(1, Math.min(fromPage, toPage));
+    const hi = Math.max(fromPage, toPage);
+    const BATCH = 6;
+    for (let start = lo; start <= hi; start += BATCH) {
+      const batch = [];
+      for (let p = start; p < start + BATCH && p <= hi; p++) batch.push(p);
+
+      const hit = await new Promise((resolve) => {
+        let pending = batch.length;
+        let found = null;
+        for (const p of batch) {
+          fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, p)).then((info) => {
+            if (info.ids.includes(postId) && found === null) found = p;
+            if (--pending === 0) resolve(found);
+          }).catch(() => { if (--pending === 0) resolve(found); });
+        }
+      });
+
+      if (hit !== null) {
+        sessionStorage.setItem("booru_bm_autojump", "1");
+        sessionStorage.setItem("booru_bm_walked", "1");
+        navigateTo(buildIndexPageUrl(bookmarkPageUrl, hit));
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Walk index pages (up to a sane limit) to find the target post, then
   // navigate the user to the index page it's on. Searches outward from the
   // page it was bookmarked on, since drift is usually toward later pages.
@@ -940,6 +1023,13 @@
           const info = await fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, p));
           if (info.ids.includes(postId)) { goToPage(p); return; }
         }
+        // Binary search concluded the post isn't on lo or hi. Its ID-monotonic
+        // assumption can be violated (custom sort orders, lazy-loaded fetched
+        // markup, large ID gaps from mass deletions), so before declaring the
+        // post deleted, do a full linear sweep from page 1 to a generous bound.
+        // This guarantees we never report a false deletion for a post that
+        // actually exists within range.
+        if (await linearSweep(postId, bookmarkPageUrl, 1, 300)) return;
         notFound();
         return;
       }

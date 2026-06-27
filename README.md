@@ -1,20 +1,20 @@
 # Booru Bookmark
 
-A Chromium (Manifest V3) browser extension that lets you bookmark image thumbnails on booru-style image boards with a bright red border, so you always know where you left off, even after a post has drifted to a different index page.
+A Chromium (Manifest V3) browser extension that lets you bookmark image thumbnails on booru-style image boards with a bright red border — so you always know where you left off, even after a post has drifted to a different index page.
 
-Right-click any thumbnail to bookmark it. The thumbnail gets a distinctive red border, your bookmarks persist across sessions, and a one-click "Navigate Bookmarks" button takes you back to a bookmarked image, automatically finding and scrolling to it even if new uploads have pushed it onto a later page.
+Right-click any thumbnail to bookmark it. The thumbnail gets a distinctive red border, your bookmarks persist across sessions, and a one-click "Navigate Bookmarks" button takes you back to a bookmarked image — automatically finding and scrolling to it even if new uploads have pushed it onto a later page.
 
 ---
 
 ## Features
 
 - **One-click bookmarking** via the right-click context menu on any thumbnail.
-- **Persistent visual markers** bookmarked thumbnails get a thick red border with a contrast halo so they stand out against any thumbnail color.
-- **Cross-page navigation** if a bookmarked post has moved to a different index page since you saved it, the extension locates the page it's on now and takes you there.
-- **Automatic scroll-to-bookmark** after navigating, the page scrolls to and pulses the bookmarked thumbnail, re-centering as the page finishes loading.
-- **Deleted-post detection** if a bookmarked post no longer exists anywhere in the index, you're returned to its last known page with a clear notice.
-- **Works on many boorus, not a fixed list** the extension detects booru sites at runtime by their page structure rather than relying on a hardcoded domain list.
-- **Fully local & private** all bookmark data is stored on your own device. Nothing is transmitted anywhere.
+- **Persistent visual markers** — bookmarked thumbnails get a thick red border with a contrast halo so they stand out against any thumbnail color.
+- **Cross-page navigation** — if a bookmarked post has moved to a different index page since you saved it, the extension locates the page it's on now and takes you there.
+- **Automatic scroll-to-bookmark** — after navigating, the page scrolls to and pulses the bookmarked thumbnail, re-centering as the page finishes loading.
+- **Deleted-post detection** — if a bookmarked post no longer exists anywhere in the index, you're returned to its last known page with a clear notice.
+- **Works on many boorus, not a fixed list** — the extension detects booru sites at runtime by their page structure rather than relying on a hardcoded domain list.
+- **Fully local & private** — all bookmark data is stored on your own device. Nothing is transmitted anywhere.
 
 ---
 
@@ -25,12 +25,13 @@ The extension identifies booru sites by detecting the underlying engine, so it w
 | Engine family | Post URL pattern | Example sites |
 | --- | --- | --- |
 | Gelbooru family | `index.php?page=post&s=view&id=N` | Gelbooru, Safebooru, booru.org-hosted sites |
-| Danbooru family | `/posts/N` | Danbooru, e621 |
+| Danbooru family | `/posts/N` | Danbooru, e621, ATFBooru |
 | Shimmie2 | `/post/view/N` | r34 paheal, Pixboard |
 | Moebooru | `/post/show/N` | yande.re, Konachan |
 | Philomena | `/images/N` | Derpibooru, Furbooru |
 
-On any page that isn't a booru, the content script detects it and terminates running.
+On any page that isn't a booru, the content script detects this and exits immediately, doing nothing.
+
 ---
 
 ## Installation
@@ -78,7 +79,7 @@ Clicking the toolbar icon opens a popup showing the current site's name, your bo
 
 ### Detection
 
-Rather than maintaining a list of booru domains, the content script inspects each page for booru engine signatures, engine meta tags, characteristic CSS classes and DOM structures, and clusters of thumbnail links matching known post-URL patterns. If three or more thumbnail links match a known engine pattern (or an engine marker is present), the page is treated as a booru. Otherwise the script exits and does nothing.
+Rather than maintaining a list of booru domains, the content script inspects each page for booru engine signatures — engine meta tags, characteristic CSS classes and DOM structures, and clusters of thumbnail links matching known post-URL patterns. If three or more thumbnail links match a known engine pattern (or an engine marker is present), the page is treated as a booru. Otherwise the script exits and does nothing.
 
 ### Storage
 
@@ -86,10 +87,10 @@ Bookmarks are stored with the browser's `chrome.storage.local` API, keyed by sit
 
 ### Finding a moved post
 
-Boorus order their default index by post ID descending, so a post's page position is monotonic in its ID as new posts are uploaded, older posts drift toward higher page numbers. When you navigate to a bookmark that isn't on the current page, the extension:
+Boorus order their default index by post ID descending, so a post's page position is monotonic in its ID — as new posts are uploaded, older posts drift toward higher page numbers. When you navigate to a bookmark that isn't on the current page, the extension:
 
-1. **Binary searches** the index by post ID. It fetches a probe page, reads the range of post IDs on it, and decides whether the target is on an earlier or later page, halving the search space each step. This finds a post hundreds of pages deep in roughly 15–20 page fetches instead of hundreds.
-2. **Falls back to a linear sweep** if the binary search concludes the post isn't found. Because custom sort orders or unusual markup can occasionally violate the ID-ordering assumption, an exhaustive sweep verifies the result before any "deleted" conclusion, so a bookmarked post that still exists is never falsely reported as gone.
+1. **Binary searches** the index by post ID. It fetches a probe page, reads the range of post IDs on it, and decides whether the target is on an earlier or later page — halving the search space each step. This finds a post hundreds of pages deep in roughly 15–20 page fetches instead of hundreds.
+2. **Falls back to a linear sweep** if the binary search concludes the post isn't found. Because custom sort orders or unusual markup can occasionally violate the ID-ordering assumption, an exhaustive sweep verifies the result before any "deleted" conclusion — so a bookmarked post that still exists is never falsely reported as gone.
 3. **Reports deletion** only after the sweep confirms the post is absent from the index, returning you to its last known page with a notice.
 
 These page lookups are plain `fetch()` requests to other pages of the same booru you're already browsing; the extension reads their existing HTML to locate the post and runs no remote code.
