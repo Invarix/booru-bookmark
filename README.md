@@ -113,7 +113,7 @@ The extension does **not** use remote code. All JavaScript and CSS is bundled in
 
 ## Privacy
 
-Booru Bookmark collects nothing. All bookmark data lives in `chrome.storage.local` on your own machine and is never transmitted, sold, or shared. The only network requests the extension makes are to pages of the booru you're already viewing, in order to find where a bookmarked post has moved — and those requests carry no information about you. See [`PRIVACY.md`](PRIVACY.md) for the full policy.
+Booru Bookmark collects nothing. All bookmark data lives in `chrome.storage.local` on your own machine and is never transmitted, sold, or shared. The only network requests the extension makes are to pages of the booru you're already viewing, in order to find where a bookmarked post has moved, and those requests carry no information about you. See [`PRIVACY.md`](PRIVACY.md) for the full policy.
 
 ---
 
