@@ -79,7 +79,7 @@ Clicking the toolbar icon opens a popup showing the current site's name, your bo
 
 ### Detection
 
-Rather than maintaining a list of booru domains, the content script inspects each page for booru engine signatures — engine meta tags, characteristic CSS classes and DOM structures, and clusters of thumbnail links matching known post-URL patterns. If three or more thumbnail links match a known engine pattern (or an engine marker is present), the page is treated as a booru. Otherwise the script exits and does nothing.
+Rather than maintaining a list of booru domains, the content script inspects each page for booru engine signatures, engine meta tags, characteristic CSS classes and DOM structures, and clusters of thumbnail links matching known post-URL patterns. If three or more thumbnail links match a known engine pattern (or an engine marker is present), the page is treated as a booru. Otherwise the script exits and does nothing.
 
 ### Storage
 
@@ -87,7 +87,7 @@ Bookmarks are stored with the browser's `chrome.storage.local` API, keyed by sit
 
 ### Finding a moved post
 
-Boorus order their default index by post ID descending, so a post's page position is monotonic in its ID — as new posts are uploaded, older posts drift toward higher page numbers. When you navigate to a bookmark that isn't on the current page, the extension:
+Boorus order their default index by post ID descending, so a post's page position is monotonic in its ID, as new posts are uploaded, older posts drift toward higher page numbers. When you navigate to a bookmark that isn't on the current page, the extension:
 
 1. **Binary searches** the index by post ID. It fetches a probe page, reads the range of post IDs on it, and decides whether the target is on an earlier or later page — halving the search space each step. This finds a post hundreds of pages deep in roughly 15–20 page fetches instead of hundreds.
 2. **Falls back to a linear sweep** if the binary search concludes the post isn't found. Because custom sort orders or unusual markup can occasionally violate the ID-ordering assumption, an exhaustive sweep verifies the result before any "deleted" conclusion — so a bookmarked post that still exists is never falsely reported as gone.
