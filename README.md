@@ -89,8 +89,8 @@ Bookmarks are stored with the browser's `chrome.storage.local` API, keyed by sit
 
 Boorus order their default index by post ID descending, so a post's page position is monotonic in its ID, as new posts are uploaded, older posts drift toward higher page numbers. When you navigate to a bookmark that isn't on the current page, the extension:
 
-1. **Binary searches** the index by post ID. It fetches a probe page, reads the range of post IDs on it, and decides whether the target is on an earlier or later page — halving the search space each step. This finds a post hundreds of pages deep in roughly 15–20 page fetches instead of hundreds.
-2. **Falls back to a linear sweep** if the binary search concludes the post isn't found. Because custom sort orders or unusual markup can occasionally violate the ID-ordering assumption, an exhaustive sweep verifies the result before any "deleted" conclusion — so a bookmarked post that still exists is never falsely reported as gone.
+1. **Binary searches** the index by post ID. It fetches a probe page, reads the range of post IDs on it, and decides whether the target is on an earlier or later page, halving the search space each step. This finds a post hundreds of pages deep in roughly 15–20 page fetches instead of hundreds.
+2. **Falls back to a linear sweep** if the binary search concludes the post isn't found. Because custom sort orders or unusual markup can occasionally violate the ID-ordering assumption, an exhaustive sweep verifies the result before any "deleted" conclusion, so a bookmarked post that still exists is never falsely reported as gone.
 3. **Reports deletion** only after the sweep confirms the post is absent from the index, returning you to its last known page with a notice.
 
 These page lookups are plain `fetch()` requests to other pages of the same booru you're already browsing; the extension reads their existing HTML to locate the post and runs no remote code.
