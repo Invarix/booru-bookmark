@@ -1,4 +1,4 @@
-// Booru Bookmark -- content.js
+// Booru Bookmark content.js
 
 (function () {
   "use strict";
@@ -8,7 +8,7 @@
   if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) return;
 
   // Post-link URL patterns shared by every booru running a given engine.
-  // Matching on these covers all sites on that engine -- present and future --
+  // Matching on these covers all sites on that engine, present and future
   // without naming individual boorus. Five engine families cover the vast
   // majority of boorus in existence:
   //   Gelbooru family   index.php?page=post&s=view&id=N   (Gelbooru, Safebooru,
@@ -88,13 +88,13 @@
   let _pendingTimer  = null; // timeout to navigate if pending jump never resolves
 
   // ── True page URL detection ───────────────────────────────────────────────
-  // location.href is unreliable for storing the bookmark's page -- boorus
+  // location.href is unreliable for storing the bookmark's page boorus
   // often update it asynchronously after the page loads (e.g. adding tags=,
   // changing page numbers, etc.). We read the canonical URL from the page
   // itself, which is always accurate.
 
   function getTruePageUrl() {
-    // Prefer the live location.href when it's a real listing URL -- it always
+    // Prefer the live location.href when it's a real listing URL, it always
     // reflects the page you're actually on. Some engines (modern Danbooru) set
     // <link rel="canonical"> to the bare site root on the index, which would
     // lose the /posts listing path, so we don't trust canonical blindly.
@@ -103,7 +103,7 @@
       return location.href;
     }
 
-    // 1. <link rel="canonical"> -- only trust it if it carries a listing path.
+    // 1. <link rel="canonical"> only trust it if it carries a listing path.
     const canonical = document.querySelector('link[rel="canonical"]');
     if (canonical?.href) {
       try {
@@ -119,7 +119,7 @@
     //    or prev/next links let us reconstruct the current page URL
     const paginatorNav = document.querySelector('nav.pagination, #paginator, .pagination');
     if (paginatorNav) {
-      // Try the current page span's surrounding context -- if there's a
+      // Try the current page span's surrounding context if there's a
       // data-current attribute, combine with the next/prev link to get the URL
       const nextLink = document.querySelector('#paginator-next[href], a#paginator-next, nav.pagination a.next');
       const prevLink = document.querySelector('#paginator-prev[href], a#paginator-prev, nav.pagination a.prev');
@@ -171,7 +171,7 @@
   // The extension context can be invalidated mid-session (e.g. the user
   // updates or reloads the extension while this tab stays open). Once that
   // happens, every chrome.* call throws synchronously. All Promise-returning
-  // wrappers below guard against this so the page never crashes -- they just
+  // wrappers below guard against this so the page never crashes, they just
   // resolve to empty/no-op results, which silently disables the extension's
   // functionality on this tab until the page is refreshed.
 
@@ -241,7 +241,7 @@
       if (!(canonical in out)) {
         out[canonical] = val;
       } else {
-        // Duplicate -- keep the richer value (one with page + post info)
+        // Duplicate - keep the richer value (one with page + post info)
         if (valueRichness(val) > valueRichness(out[canonical])) out[canonical] = val;
         changed = true;
       }
@@ -290,7 +290,7 @@
       if (isThumbWrapper(node)) return node;
       node = node.parentElement;
     }
-    // No recognised wrapper -- fall back to the <img> itself (bare-img boorus).
+    // No recognised wrapper - fall back to the <img> itself (bare-img boorus).
     const img = startEl.tagName?.toLowerCase() === "img"
       ? startEl : startEl.closest?.("img");
     return img || startEl.parentElement || startEl;
@@ -311,7 +311,7 @@
     };
 
     // Canonical key: the numeric post ID, normalised to "num:N" no matter which
-    // source it came from. This is CRITICAL -- on some boorus the same post can
+    // source it came from. This is CRITICAL. On some boorus the same post can
     // be identified via data-id, an element id, OR its link href depending on
     // render timing (e.g. deferred loaders that add data-id late). If those
     // produced different keys, one post could be stored as two bookmarks.
@@ -340,7 +340,7 @@
     const n = idFromHref(innerHref);
     if (n) return "num:" + n;
 
-    // 4. Non-numeric fallbacks (rare engines) -- keep stable per-post
+    // 4. Non-numeric fallbacks (rare engines) keep stable per-post
     if (container.dataset?.postId) return "pid:" + container.dataset.postId;
     if (container.dataset?.id)     return "did:" + container.dataset.id;
     if (innerHref)                 return "href:" + innerHref;
@@ -348,7 +348,7 @@
   }
 
   // Extract the post's own permalink from a container (e.g. /posts/12345).
-  // This is the stable destination for the "open post page" fallback -- unlike
+  // This is the stable destination for the "open post page" fallback, unlike
   // the index page URL, a post's permalink never changes as the index reshuffles.
   function getPostLink(container) {
     // The first <a href> inside the container that looks like a post permalink
@@ -441,7 +441,7 @@
         const label       = document.createElement("span");
         label.className   = "booru-bookmark-label";
         label.textContent = "📌";
-        label.title       = "Bookmarked -- right-click to remove";
+        label.title       = "Bookmarked - right-click to remove";
         container.appendChild(label);
       }
       if (tag !== "img" && getComputedStyle(container).position === "static")
@@ -486,7 +486,7 @@
       )) {
         // Only apply to genuine single-post thumbnail wrappers. Page-level
         // containers can carry a data-id and resolve (via their first inner
-        // post link) to a bookmarked post's ID -- without this guard the border
+        // post link) to a bookmarked post's ID without this guard the border
         // would wrap the entire index.
         if (!isThumbWrapper(el)) continue;
         const id = getPostId(el);
@@ -564,13 +564,13 @@
   // ── Pending jump ───────────────────────────────────────────────────────────
   // Arms a post ID to scroll to as soon as it appears in the DOM via
   // runRestore. If it hasn't appeared within 2 seconds, navigate to the
-  // stored page URL instead -- the bookmark is on a different page.
+  // stored page URL instead - the bookmark is on a different page.
 
   function checkPendingJump(container, id) {
     if (!_pendingJumpId || id !== _pendingJumpId) return;
     _pendingJumpId = null;
     clearTimeout(_pendingTimer);
-    sessionStorage.removeItem("booru_bm_walked"); // success -- clear walk guard
+    sessionStorage.removeItem("booru_bm_walked"); // success - clear walk guard
     if (!isDeleted(container)) {
       scrollToBookmark(container);
     } else {
@@ -627,7 +627,7 @@
           _pendingTimer = setTimeout(tick, 200);
           return;
         }
-        // Window exhausted -- the post genuinely isn't on this page.
+        // Window exhausted, the post genuinely isn't on this page.
         _pendingJumpId = null;
         if (sessionStorage.getItem("booru_bm_walked")) {
           // We already walked here and confirmed the post should be present,
@@ -640,7 +640,7 @@
           });
           return;
         }
-        // Not where we expected -- it drifted to another page. Walk to find it.
+        // Not where we expected, it drifted to another page. Walk to find it.
         findPostPageAndGo(postId, pageUrl);
       };
       tick();
@@ -669,7 +669,7 @@
 
     // Scroll immediately, then re-assert after layout settles. On lazy-loading
     // boorus, thumbnails above the target finish loading and expand AFTER the
-    // first scroll, pushing the target off-centre -- re-centering fixes that.
+    // first scroll, pushing the target off-centre - re-centering fixes that.
     doScroll();
     requestAnimationFrame(doScroll);          // after the next paint
     setTimeout(doScroll, 250);                // after early lazy-load shifts
@@ -728,7 +728,7 @@
 
     const [postId, value] = entries[_jumpIndex];
 
-    // Normalise storage value -- it may be an object { page, post } (current
+    // Normalise storage value, it may be an object { page, post } (current
     // schema) or a bare URL string (legacy schema). Extract both URLs.
     let pageUrl = null, postUrl = null;
     if (value && typeof value === "object") {
@@ -738,7 +738,7 @@
       pageUrl = value; // legacy: only the index page URL was stored
     }
 
-    // STEP 1 -- is the bookmarked thumbnail on the current page right now?
+    // STEP 1 - is the bookmarked thumbnail on the current page right now?
     // If so, just scroll to it. This is the common case while browsing.
     const result = findContainerByPostId(postId);
     if (result && !isDeleted(result.container)) {
@@ -746,19 +746,19 @@
       return;
     }
     if (result && isDeleted(result.container)) {
-      // The post is on this page but deleted -- show the nearest neighbour
+      // The post is on this page but deleted - show the nearest neighbour
       highlightNearest(result.container);
       return;
     }
 
-    // STEP 2 -- not on this page. Search the index to find which page the post
+    // STEP 2 - not on this page. Search the index to find which page the post
     // lives on NOW, then navigate straight there. We no longer hop to the
     // stored page first (which caused a wasted reload when the post had drifted
     // away from it). The walk starts from whichever page is the better guess:
     // the page we're currently on, or the page the bookmark was placed on.
     let walkFromUrl = null;
     if (sameIndexPage(pageUrl)) {
-      // We're already on the stored listing -- the page may still be rendering
+      // We're already on the stored listing - the page may still be rendering
       // (deferred thumbnails). Give it a brief chance before walking.
       if (document.readyState !== "complete") {
         _pendingJumpId = postId;
@@ -824,7 +824,7 @@
       } else if (/\/post\/list\/?$/i.test(u.pathname) || /\/post\/list\//i.test(u.pathname)) {
         u.pathname = u.pathname.replace(/\/?$/, "/" + pageNum);
       } else {
-        // Unknown shape -- safest is query param, which most engines accept.
+        // Unknown shape - safest is query param, which most engines accept.
         u.searchParams.set("page", String(pageNum));
       }
       return u.toString();
@@ -844,7 +844,7 @@
   // boorus order the default index by post ID DESCENDING, so a target ID higher
   // than a page's max means the post is on an EARLIER page, lower than its min
   // means a LATER page, and within range means it's on this page.
-  // Returns { ids:[...], maxNum, minNum, count } -- empty page => count 0.
+  // Returns { ids:[...], maxNum, minNum, count } - empty page => count 0.
   async function fetchPageInfo(pageUrl) {
     try {
       const resp = await fetch(pageUrl, { credentials: "include" });

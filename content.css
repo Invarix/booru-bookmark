@@ -24,7 +24,7 @@
   outline-offset: 3px !important;
   border-radius: 2px !important;
   /* Layered box-shadow does the heavy lifting for visibility:
-     1. a tight DARK ring hugging the outline -- this is what makes the red
+     1. a tight DARK ring hugging the outline. This is what makes the red
         readable even against red/orange/pink thumbnails (a red-on-red border
         otherwise disappears).
      2. a thin BRIGHT inner ring for extra separation from the image edge.
@@ -110,7 +110,7 @@
   border: 1.5px solid rgba(255,100,100,0.3) !important;
 }
 
-/* Jump toast -- separate persistent element, no animation system */
+/* Jump toast, separate persistent element, no animation system */
 #booru-bookmark-jump-toast {
   display: none;
   position: fixed !important;
@@ -141,7 +141,7 @@
   border-color: rgba(160, 160, 255, 0.5) !important;
 }
 
-/* Persistent error toast -- shown above the Navigate Bookmarks button when a
+/* Persistent error toast shown above the Navigate Bookmarks button when a
    bookmarked post can't be found (e.g. deleted). Red, dismissible by click. */
 #booru-bookmark-error-toast {
   display: none;

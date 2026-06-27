@@ -1,4 +1,4 @@
-// Booru Bookmark -- background.js
+// Booru Bookmark background.js
 
 const MENU_BOOKMARK   = "booru_bookmark_set";
 const MENU_UNBOOKMARK = "booru_bookmark_clear";

@@ -1,4 +1,4 @@
-// Booru Bookmark -- popup.js
+// Booru Bookmark - popup.js
 
 const STORAGE_PFX = "booru_bm_";
 
@@ -33,7 +33,7 @@ const STORAGE_PFX = "booru_bm_";
     btnJump.disabled = true;
   }
 
-  // Jump to bookmark -- sends message to content script then closes popup
+  // Jump to bookmark - sends message to content script then closes popup
   // so the user can see the page scroll to the bookmarked thumbnail.
   btnJump.addEventListener("click", () => {
     chrome.tabs.sendMessage(tab.id, { type: "JUMP_TO_BOOKMARK" }).catch(() => {});
