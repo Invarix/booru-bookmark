@@ -86,6 +86,7 @@
   let _jumpIndex     = -1;
   let _pendingJumpId = null;
   let _pendingTimer  = null; // timeout to navigate if pending jump never resolves
+  let _jumpInFlight  = false; // true while a cross-page search is running
 
   // ── True page URL detection ───────────────────────────────────────────────
   // location.href is unreliable for storing the bookmark's page boorus
@@ -251,13 +252,44 @@
 
   // ── Container & ID resolution ──────────────────────────────────────────────
 
-  // A real thumbnail wrapper holds exactly one post image. A page-level
-  // container (post list, content column) holds many. Rejecting any candidate
-  // with more than one <img> prevents the border from landing on a huge
-  // ancestor and wrapping the whole index.
+  // Extract a numeric post ID purely from an anchor's href. Unlike getPostId,
+  // this deliberately ignores the anchor's own id attribute, which on some
+  // engines carries unrelated numbers (e.g. id="delete_99", "post-vote-up-12")
+  // that must NOT be mistaken for a post ID when we're inspecting the links
+  // inside a wrapper.
+  function postIdFromAnchorHref(a) {
+    const href = a?.getAttribute?.("href");
+    if (!href) return null;
+    let m;
+    if ((m = href.match(/[?&]id=(\d+)/i))) {
+      // Gelbooru id= only counts on an actual post-view link, not list/pool links
+      if (/s=view|page=post/i.test(href)) return "num:" + m[1];
+    }
+    if ((m = href.match(/\/posts\/(\d+)(?:[/?#]|$)/i)))      return "num:" + m[1]; // Danbooru /posts/N
+    if ((m = href.match(/\/post\/view\/(\d+)(?:[/?#]|$)/i))) return "num:" + m[1]; // Shimmie2 /post/view/N
+    if ((m = href.match(/\/post\/show\/(\d+)(?:[/?#]|$)/i))) return "num:" + m[1]; // Moebooru /post/show/N
+    if ((m = href.match(/\/images\/(\d+)(?:[/?#]|$)/i)))     return "num:" + m[1]; // Philomena /images/N
+    return null; // /post/delete/N, /post/list/tag/N, votes, etc. are NOT posts
+  }
+
+  // A real thumbnail wrapper corresponds to exactly one post. A page-level
+  // container (post list, content column) corresponds to many. We distinguish
+  // them by counting DISTINCT POST IDs reachable via post-permalink hrefs. We
+  // ignore images, navigation/tag links, and anchor id attributes, so a single
+  // captioned thumbnail (with tag links, vote/flag/delete links, icon images)
+  // is never mistaken for a multi-post container.
   function isSinglePostWrapper(node) {
-    if (!node || !node.querySelectorAll) return true; // an <img> itself has none
-    return node.querySelectorAll("img").length <= 1;
+    if (!node || !node.querySelectorAll) return true; // an <img> itself qualifies
+    const anchors = node.querySelectorAll("a[href]");
+    const distinctPosts = new Set();
+    for (const a of anchors) {
+      const id = postIdFromAnchorHref(a); // href-only: only true post permalinks
+      if (id) {
+        distinctPosts.add(id);
+        if (distinctPosts.size > 1) return false;
+      }
+    }
+    return true;
   }
 
   // True only for elements that are genuine single-post thumbnail wrappers,
@@ -336,7 +368,14 @@
       if (src && !src.startsWith("data:")) return "src:" + src;
       return null;
     }
-    const innerHref = container.querySelector("a[href]")?.getAttribute("href");
+    // If the element is itself an anchor, read its own href first.
+    if (container.tagName?.toLowerCase() === "a") {
+      const ownHref = container.getAttribute("href");
+      const n = idFromHref(ownHref);
+      if (n) return "num:" + n;
+      if (ownHref) return "href:" + ownHref;
+    }
+    const innerHref = container.querySelector?.("a[href]")?.getAttribute("href");
     const n = idFromHref(innerHref);
     if (n) return "num:" + n;
 
@@ -383,7 +422,25 @@
     return { container, id, srcUrl };
   }
 
+  // True when the current page is a single post's own page rather than an
+  // index/listing. On a post page, the post's ID appears on many unrelated
+  // elements (vote and score widgets, favorite buttons, comment sections), so
+  // matching stored bookmarks against the DOM there borders random UI. The
+  // bookmark border belongs only on index thumbnails, so restore and container
+  // matching are disabled on post pages entirely.
+  function isSinglePostPage() {
+    const here = location.pathname + location.search;
+    return (
+      /\/posts\/\d+(?:[/?#]|$)/i.test(here) ||      // Danbooru family
+      /\/post\/view\/\d+(?:[/?#]|$)/i.test(here) || // Shimmie2
+      /\/post\/show\/\d+(?:[/?#]|$)/i.test(here) || // Moebooru
+      /\/images\/\d+(?:[/?#]|$)/i.test(here) ||     // Philomena
+      (/[?&]s=view/i.test(here) && /[?&]id=\d+/i.test(here)) // Gelbooru family
+    );
+  }
+
   function findContainerByPostId(postId) {
+    if (isSinglePostPage()) return null; // post pages have no thumbnails to match
     const stamped = document.querySelector(`[${BM_ATTR}="${CSS.escape(postId)}"]`);
     if (stamped) return { container: stamped, id: postId };
     for (const el of document.querySelectorAll(
@@ -476,6 +533,7 @@
 
   async function runRestore() {
     if (_restoreRunning) return;
+    if (isSinglePostPage()) return; // borders belong only on index thumbnails
     _restoreRunning = true;
     try {
       const stored = await loadBookmarks();
@@ -716,6 +774,14 @@
   // ── Jump to bookmark ───────────────────────────────────────────────────────
 
   async function jumpToBookmark() {
+    // Guard against a second click while a search/navigation is already in
+    // flight. On deferred-loading boorus the search takes a moment, and a second
+    // click would restart it from scratch (the "took two clicks" problem).
+    if (_jumpInFlight) {
+      showToast("Still locating your bookmark...", "info");
+      return;
+    }
+
     const stored  = await loadBookmarks();
     const entries = Object.entries(stored);
     if (!entries.length) {
@@ -780,7 +846,19 @@
       return;
     }
 
-    findPostPageAndGo(postId, walkFromUrl);
+    _jumpInFlight = true;
+    try {
+      // When several bookmarks are stored, say which one is being located so
+      // cycling through them is visible and never looks like a wrong recall.
+      const label = entries.length > 1
+        ? `Locating bookmark ${_jumpIndex + 1} of ${entries.length}...`
+        : null;
+      await findPostPageAndGo(postId, walkFromUrl, label);
+    } finally {
+      // If the search navigated, the page changes and this instance goes away.
+      // If it didn't navigate (e.g. showed a notice), clear so a retry works.
+      _jumpInFlight = false;
+    }
   }
 
   // ── Page-walk search ───────────────────────────────────────────────────────
@@ -839,6 +917,61 @@
     return info.ids.includes(postId);
   }
 
+  // Extract post-ID info from a document (fetched or live).
+  //
+  // METRICS COME FROM PERMALINKS ONLY. The numeric min/max and the per-page
+  // count drive every direction decision in the search, so they must be
+  // derived exclusively from post-permalink anchors (/posts/N, /post/view/N,
+  // s=view&id=N, ...). Only real posts have permalinks. Deriving metrics from
+  // wrapper elements is NOT safe: engine layouts render sitewide widgets that
+  // carry small numeric data-id values on every page (verified in the engine
+  // source: a news banner div with data-id equal to the news item's id ships
+  // in the global layout). One such element drags minNum down to a tiny
+  // number, which makes every page's ID range appear to contain any target,
+  // and the search then falsely concludes a present post is deleted.
+  //
+  // Wrapper-derived IDs are still collected, but for MEMBERSHIP only, and only
+  // from wrappers that contain an image (thumbnails always do; layout widgets
+  // do not). They never influence count or the numeric range.
+  function extractPageInfo(root) {
+    const seen = new Set();
+    const ids = [];
+    const nums = [];
+
+    // Primary pass: post-permalink anchors. Metrics come only from here.
+    for (const a of root.querySelectorAll("a[href]")) {
+      const key = postIdFromAnchorHref(a);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      ids.push(key);
+      nums.push(parseInt(key.slice(4), 10));
+    }
+    const count  = ids.length;
+    const maxNum = nums.length ? Math.max(...nums) : null;
+    const minNum = nums.length ? Math.min(...nums) : null;
+
+    // Supplemental pass, membership only: wrapper-declared IDs for markup where
+    // a thumbnail exposes its ID without a matching permalink. Requiring an
+    // image inside the wrapper keeps sitewide widgets (news banners, notices)
+    // out even here.
+    for (const el of root.querySelectorAll(
+      "article, [data-post-id], [data-id], span.thumb, li.thumb, li.shm-thumb"
+    )) {
+      if (!isSinglePostWrapper(el)) continue;      // skip page-level containers
+      if (!el.querySelector?.("img")) continue;    // widgets carry no thumbnail
+      const key = getPostId(el);
+      if (key && !seen.has(key)) { seen.add(key); ids.push(key); }
+    }
+    // Bare-image thumbnails (engines with no wrapper element).
+    for (const img of root.querySelectorAll("img")) {
+      if (img.closest("article, [data-post-id], [data-id], span.thumb, li.thumb")) continue;
+      const key = getPostId(img);
+      if (key && !seen.has(key)) { seen.add(key); ids.push(key); }
+    }
+
+    return { ids, maxNum, minNum, count };
+  }
+
   // Fetch an index page once and extract: the set of post-ID keys on it, plus
   // the numeric min/max of those IDs. The numeric range powers a binary search:
   // boorus order the default index by post ID DESCENDING, so a target ID higher
@@ -851,33 +984,7 @@
       if (!resp.ok) return { ids: [], maxNum: null, minNum: null, count: 0 };
       const html = await resp.text();
       const doc  = new DOMParser().parseFromString(html, "text/html");
-
-      const ids = [];
-      const nums = [];
-      const addId = (key) => {
-        if (!key) return;
-        ids.push(key);
-        const m = key.match(/^num:(\d+)$/);
-        if (m) nums.push(parseInt(m[1], 10));
-      };
-
-      for (const el of doc.querySelectorAll(
-        "article, [data-post-id], [data-id], span.thumb, li.thumb, li.shm-thumb"
-      )) {
-        if (!isThumbWrapper(el)) continue;
-        addId(getPostId(el));
-      }
-      for (const img of doc.querySelectorAll("img")) {
-        if (img.closest("article, [data-post-id], [data-id], span.thumb, li.thumb")) continue;
-        addId(getPostId(img));
-      }
-
-      return {
-        ids,
-        maxNum: nums.length ? Math.max(...nums) : null,
-        minNum: nums.length ? Math.min(...nums) : null,
-        count: ids.length,
-      };
+      return extractPageInfo(doc);
     } catch (_) {
       return { ids: [], maxNum: null, minNum: null, count: 0 };
     }
@@ -917,16 +1024,25 @@
     return false;
   }
 
+  // Read post-ID info from the LIVE current page's DOM, using the same
+  // extraction as fetchPageInfo. When the user is already on a listing page,
+  // this lets the search seed its estimate without re-fetching a page we're
+  // already viewing, removing a full network round-trip (on heavy index pages
+  // that round-trip is most of the perceived delay).
+  function livePageInfo() {
+    return extractPageInfo(document);
+  }
+
   // Walk index pages (up to a sane limit) to find the target post, then
   // navigate the user to the index page it's on. Searches outward from the
   // page it was bookmarked on, since drift is usually toward later pages.
-  async function findPostPageAndGo(postId, bookmarkPageUrl) {
+  async function findPostPageAndGo(postId, bookmarkPageUrl, label) {
     if (!bookmarkPageUrl) {
       showToast("Bookmarked post not found on this page", "info");
       return;
     }
 
-    showToast("Locating bookmark across pages...", "info");
+    showToast(label || "Locating bookmark across pages...", "info");
 
     // Determine the page number to start searching from. Prefer the page the
     // user is currently on (if it's a valid index page of this listing), since
@@ -981,32 +1097,89 @@
     // fetches. Typically 2-3 fetches total whether the post is 5 or 500 pages
     // deep, versus ~log2(pages) for binary search.
     if (targetNum !== null) {
-      // Read page 1: highest ID anchors an interpolation estimate.
-      const page1 = await fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, 1));
-      if (page1.ids.includes(postId)) { goToPage(1); return; }
+      // Anchor the estimate from page 1's highest ID and posts-per-page. If the
+      // user is currently ON a listing page of this same search, read that from
+      // the LIVE DOM instead of fetching, saving a network round-trip (often the
+      // bulk of the perceived delay on heavy index pages).
+      let page1 = null;
+      const currentPageNum = pageNumOf(location.href);
+      const liveInfo = livePageInfo();
+      const onListingNow = sameListing(bookmarkPageUrl) && liveInfo.count > 0 && liveInfo.maxNum !== null;
+
+      if (currentPageNum === 1 && onListingNow) {
+        // We're already viewing page 1 of the right listing; use it directly.
+        page1 = liveInfo;
+        if (page1.ids.includes(postId)) { goToPage(1); return; }
+      } else {
+        page1 = await fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, 1));
+        if (page1.ids.includes(postId)) { goToPage(1); return; }
+      }
 
       if (page1.count > 0 && page1.maxNum !== null && targetNum <= page1.maxNum) {
         const perPage = page1.count;
         const highest = page1.maxNum;
 
-        // ONE interpolation probe to seed a tight bracket. With IDs descending
-        // and roughly sequential, the target's page is about
-        //     (highest - target) / perPage + 1
-        // We fetch that estimate, which is usually within a few pages, then
-        // run a bounded binary search around it. Binary search is provably
-        // correct and converges in log2(bracketWidth) fetches, so even when the
-        // interpolation estimate is off due to ID gaps, the result is exact and
-        // fast. This finds a post on any page in roughly 2-6 fetches total.
-        let lo = 1, hi = null;            // bracket: lo at/before, hi at/after
-        let loMax = highest;              // maxNum at page lo (for sanity)
+        // If we're currently on a listing page (any page number) of this search,
+        // seed the bracket using the live page's ID range too -- this can bracket
+        // the target immediately without any fetch when the post is nearby.
+        let lo = 1, hi = null;
+        let loMax = highest;
 
-        const seed = Math.max(1, Math.floor((highest - targetNum) / perPage) + 1);
-        let probe = seed;
+        if (onListingNow && currentPageNum >= 1) {
+          if (liveInfo.ids.includes(postId)) { goToPage(currentPageNum); return; }
+          if (liveInfo.minNum !== null) {
+            if (targetNum > liveInfo.maxNum)      hi = currentPageNum; // target earlier
+            else if (targetNum < liveInfo.minNum) lo = currentPageNum; // target later
+          }
+        }
+
+        // Estimate the target's page using page 1's OBSERVED ID span rather
+        // than assuming one post per ID. Page 1 holds perPage posts spanning
+        // (highest - minNum) IDs. On the default index that span is about
+        // perPage (dense IDs), so this reduces to the plain arithmetic. On a
+        // tag-filtered listing the same page spans a huge ID range, and using
+        // the observed span keeps the estimate on target instead of
+        // overshooting by thousands of pages. Note: the paginator's visible
+        // page numbers must NOT be used to bound this, because paginators show
+        // a window of nearby pages, not the listing's true end.
+        const pageIdSpan = Math.max(
+          perPage,
+          page1.minNum !== null ? (highest - page1.minNum) + 1 : perPage
+        );
+        let seed = Math.max(1, Math.floor((highest - targetNum) / pageIdSpan) + 1);
+
+        let probe = (hi !== null && seed >= hi) ? Math.max(lo + 1, hi - 1) : Math.max(seed, lo + 1 || 1);
+        if (probe < 1) probe = 1;
         let expandStep = Math.max(1, Math.floor(seed / 2));
-        let bounded = false;
+        let bounded = (hi !== null && lo < hi);
 
-        // Phase A: probe the seed; if the target isn't bracketed yet, expand
-        // outward in the indicated direction until we bracket it.
+        // Seed probe: always try our best-guess page first, even when the
+        // paginator already bounded the bracket. The seed is usually exact on
+        // dense listings, so this resolves most jumps in this single fetch;
+        // its ID range also tightens the bracket for the binary phase.
+        if (probe > lo && (hi === null || probe < hi)) {
+          const info = await fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, probe));
+          if (info.count === 0) {
+            hi = Math.min(hi ?? probe, probe);
+            bounded = true;
+          } else {
+            if (info.ids.includes(postId)) { goToPage(probe); return; }
+            if (info.minNum === null) { lo = 1; hi = null; bounded = false; }
+            else if (targetNum <= info.maxNum && targetNum >= info.minNum) {
+              lo = probe; hi = probe; bounded = true;
+            } else if (targetNum > info.maxNum) {
+              hi = Math.min(hi ?? probe, probe);
+              bounded = (lo < hi);
+              probe = Math.max(1, probe - expandStep);
+            } else {
+              lo = Math.max(lo, probe); loMax = info.maxNum;
+              bounded = (hi !== null && lo < hi);
+              probe = probe + expandStep;
+            }
+          }
+        }
+
+        // Phase A: if still not bracketed, expand outward until we are.
         for (let i = 0; i < 24 && !bounded; i++) {
           const info = await fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, probe));
 
@@ -1060,20 +1233,22 @@
             if (info.minNum !== null && targetNum <= info.maxNum && targetNum >= info.minNum)
               inRangePage = p;
           }
-          // If the target's ID falls squarely within a page's range but the exact
-          // post isn't there, it has been deleted. Do a small confirming sweep of
-          // just that neighborhood rather than the full index.
+          // If the target's ID falls within a page's range but the exact post
+          // isn't there, it is PROBABLY deleted. Check the immediate
+          // neighborhood first (fast), but do NOT conclude deletion from that
+          // alone: fall through to the exhaustive sweep below. Poisoned or
+          // unusual ID ranges must never turn a present bookmark into a false
+          // "deleted" verdict. The full sweep only costs time when the post is
+          // genuinely gone.
           if (inRangePage !== null) {
             if (await linearSweep(postId, bookmarkPageUrl, inRangePage - 2, inRangePage + 2)) return;
-            notFound();
-            return;
           }
         }
       }
 
-      // Not found by interpolation+binary search. Verify with a bounded linear
-      // sweep before declaring deletion, so a post that exists under unusual
-      // ordering or markup is never falsely reported gone.
+      // Nothing conclusive from interpolation or binary search. Verify with a
+      // bounded exhaustive sweep before declaring deletion, so a post that
+      // exists is never falsely reported gone regardless of markup or ordering.
       if (await linearSweep(postId, bookmarkPageUrl, 1, 300)) return;
       notFound();
       return;
@@ -1136,6 +1311,12 @@
         const c = new URL(u.href);
         c.searchParams.delete("page");
         c.searchParams.delete("pid"); // Gelbooru-family uses pid offset
+        // Drop params with EMPTY values (e.g. a bare tags= from an empty search
+        // box). "/posts?tags=" and "/posts" are the same listing, and treating
+        // them as different disables the live-page fast path.
+        for (const [k, v] of [...c.searchParams.entries()]) {
+          if (v === "") c.searchParams.delete(k);
+        }
         // Path-based page number (/list/N)
         c.pathname = c.pathname.replace(/\/\d+\/?$/, "/");
         // Normalise param order for stable comparison
@@ -1291,6 +1472,14 @@
     }
 
     let resolved = null;
+    if (isSinglePostPage() && msg.type === "BOOKMARK") {
+      // Bookmarks are placed on index thumbnails. On a post's own page the
+      // right-clicked element resolves to full-size images or UI widgets whose
+      // IDs would create junk storage entries, so decline with guidance.
+      showToast("Bookmark thumbnails from the index page, not the post page", "info");
+      sendResponse({ ok: false });
+      return;
+    }
     if (msg.postId) resolved = findContainerByPostId(msg.postId);
     if (!resolved && msg.srcUrl) resolved = findContainerBySrc(msg.srcUrl);
 

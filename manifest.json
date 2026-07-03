@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Booru Bookmark",
-  "version": "1.2.0",
+  "version": "1.2.9",
   "description": "Right-click any booru image thumbnail to bookmark it with a red border, so you always know where you left off.",
   "permissions": [
     "contextMenus",
@@ -15,9 +15,15 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
   ],
