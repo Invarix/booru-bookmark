@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Booru Bookmark</title>
+  <style>
+    /* ── Reset & base ────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --red:      #dc1414;
+      --red-dim:  #a10f0f;
+      --bg:       #111314;
+      --surface:  #1b1d1f;
+      --border:   #2a2d30;
+      --text:     #e8e8e8;
+      --muted:    #888;
+      --accent:   #ff3c3c;
+    }
+
+    body {
+      width: 300px;
+      min-height: 120px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 13px 14px 11px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .logo {
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .title {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      color: var(--text);
+    }
+
+    .title span {
+      color: var(--accent);
+    }
+
+    /* ── Body ───────────────────────────────────────────────────────────── */
+    .body {
+      padding: 12px 14px;
+    }
+
+    .site-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--red);
+      flex-shrink: 0;
+      box-shadow: 0 0 5px var(--accent);
+    }
+
+    .count-badge {
+      margin-left: auto;
+      background: var(--red);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 1px 7px;
+      border-radius: 20px;
+      min-width: 22px;
+      text-align: center;
+    }
+
+    /* ── Empty state ─────────────────────────────────────────────────────── */
+    .empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 22px 0 16px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .empty .icon {
+      font-size: 28px;
+      opacity: 0.4;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────────────── */
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 12px;
+    }
+
+    button {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    button.danger {
+      background: transparent;
+      color: var(--accent);
+      border-color: var(--red-dim);
+    }
+    button.danger:hover {
+      background: rgba(220,20,20,0.12);
+      border-color: var(--accent);
+    }
+
+    button.neutral {
+      background: transparent;
+      color: var(--muted);
+      border-color: var(--border);
+    }
+    button.neutral:hover {
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    button.jump {
+      background: transparent;
+      color: #a0a0ff;
+      border-color: rgba(100,100,200,0.4);
+    }
+    button.jump:hover {
+      background: rgba(100,100,200,0.12);
+      border-color: #a0a0ff;
+      color: #c0c0ff;
+    }
+    button.jump:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    /* ── Footer ─────────────────────────────────────────────────────────── */
+    footer {
+      padding: 8px 14px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    footer a {
+      color: var(--muted);
+      text-decoration: none;
+    }
+    footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">📌</div>
+  <div class="title">Booru <span>Bookmark</span></div>
+</header>
+
+<div class="body">
+  <div class="site-row" id="site-info">
+    <div class="dot"></div>
+    <span id="site-name" style="flex:1">Loading…</span>
+    <div class="count-badge" id="bm-count">·</div>
+  </div>
+
+  <div id="empty-state" class="empty" style="display:none">
+    <div class="icon">🖼️</div>
+    <div>No bookmarks on this page.<br>Right-click a thumbnail to bookmark it.</div>
+  </div>
+
+  <div class="actions">
+    <button class="jump" id="btn-jump">
+      <span>🔍</span> Go to bookmark
+    </button>
+    <button class="danger" id="btn-clear-page">
+      <span>🗑</span> Clear bookmarks for this site
+    </button>
+    <button class="neutral" id="btn-clear-all">
+      <span>✖</span> Clear ALL stored bookmarks
+    </button>
+  </div>
+</div>
+
+<footer>
+  <span>Right-click any thumbnail → <strong>Bookmark Image</strong></span>
+</footer>
+
+<script src="popup.js"></script>
+</body>
+</html>
