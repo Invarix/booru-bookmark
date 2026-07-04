@@ -4,7 +4,10 @@ A Chromium (Manifest V3) browser extension that lets you bookmark image thumbnai
 
 Right-click any thumbnail to bookmark it. The thumbnail gets a distinctive red border, your bookmarks persist across sessions, and a one-click "Navigate Bookmarks" button takes you back to a bookmarked image, automatically finding and scrolling to it even if new uploads have pushed it onto a later page.
 
----
+<!-- Ko-fi badge -->
+<a href="https://ko-fi.com/Invarix">
+  <img src="https://img.shields.io/badge/Ko--fi-Support%20Me-ff5e5b?logo=ko-fi&logoColor=white" alt="Ko-fi">
+</a>
 
 ## Features
 
