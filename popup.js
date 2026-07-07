@@ -2,6 +2,42 @@
 
 const STORAGE_PFX = "booru_bm_";
 
+// Read a single site's bookmarks, sync first (cross-device), then falling back
+// to the legacy local area so pre-sync bookmarks still show a correct count.
+async function readSite(storageKey) {
+  try {
+    const s = await chrome.storage.sync.get(storageKey);
+    if (s && s[storageKey] && Object.keys(s[storageKey]).length) return s[storageKey];
+  } catch (_) { /* fall through to local */ }
+  try {
+    const l = await chrome.storage.local.get(storageKey);
+    return l[storageKey] || {};
+  } catch (_) { return {}; }
+}
+
+// Remove keys from BOTH areas so a clear is total and can't be resurrected by a
+// stale copy in the other area.
+async function removeEverywhere(keys) {
+  const arr = Array.isArray(keys) ? keys : [keys];
+  if (!arr.length) return;
+  try { await chrome.storage.sync.remove(arr); }  catch (_) {}
+  try { await chrome.storage.local.remove(arr); } catch (_) {}
+}
+
+// Collect every booru_bm_ key present in either area.
+async function allSiteKeys() {
+  const keys = new Set();
+  try {
+    const s = await chrome.storage.sync.get(null);
+    Object.keys(s).forEach(k => { if (k.startsWith(STORAGE_PFX)) keys.add(k); });
+  } catch (_) {}
+  try {
+    const l = await chrome.storage.local.get(null);
+    Object.keys(l).forEach(k => { if (k.startsWith(STORAGE_PFX)) keys.add(k); });
+  } catch (_) {}
+  return [...keys];
+}
+
 (async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -23,8 +59,7 @@ const STORAGE_PFX = "booru_bm_";
   siteNameEl.textContent = url.hostname.replace(/^www\./, "");
 
   const storageKey = STORAGE_PFX + url.origin;
-  const data       = await chrome.storage.local.get(storageKey);
-  const stored     = data[storageKey] || {};
+  const stored     = await readSite(storageKey);
   const count      = Object.keys(stored).length;
 
   bmCountEl.textContent = count;
@@ -40,20 +75,19 @@ const STORAGE_PFX = "booru_bm_";
     window.close();
   });
 
-  // Clear this site's bookmarks
+  // Clear this site's bookmarks (both areas)
   document.getElementById("btn-clear-page").addEventListener("click", async () => {
-    await chrome.storage.local.remove(storageKey);
+    await removeEverywhere(storageKey);
     chrome.tabs.sendMessage(tab.id, { type: "CLEAR_ALL" }).catch(() => {});
     bmCountEl.textContent = "0";
     emptyEl.style.display = "flex";
     btnJump.disabled = true;
   });
 
-  // Clear ALL bookmarks across every booru site
+  // Clear ALL bookmarks across every booru site (both areas)
   document.getElementById("btn-clear-all").addEventListener("click", async () => {
-    const all  = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter(k => k.startsWith(STORAGE_PFX));
-    if (keys.length) await chrome.storage.local.remove(keys);
+    const keys = await allSiteKeys();
+    await removeEverywhere(keys);
     chrome.tabs.sendMessage(tab.id, { type: "CLEAR_ALL" }).catch(() => {});
     bmCountEl.textContent = "0";
     emptyEl.style.display = "flex";

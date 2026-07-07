@@ -18,7 +18,7 @@ If you find this extension useful, you can support its development on Ko-fi:
 - **Automatic scroll-to-bookmark**: after navigating, the page scrolls to and pulses the bookmarked thumbnail, re-centering as the page finishes loading.
 - **Deleted-post detection**: if a bookmarked post no longer exists anywhere in the index, you're returned to its last known page with a clear notice.
 - **Works on many boorus, not a fixed list**: the extension detects booru sites at runtime by their page structure rather than relying on a hardcoded domain list.
-- **Fully local & private**: all bookmark data is stored on your own device. Nothing is transmitted anywhere.
+- **Syncs across your devices, still private**: bookmarks are stored in the browser's own storage and, if you are signed into the browser, follow you to your other devices through the browser's built-in encrypted sync. Nothing is ever sent to the developer.
 
 ---
 
@@ -87,7 +87,7 @@ Rather than maintaining a list of booru domains, the content script inspects eac
 
 ### Storage
 
-Bookmarks are stored with the browser's `chrome.storage.local` API, keyed by site origin. Each bookmark records the post's canonical numeric ID and the index page it was on when bookmarked. Post IDs from every source (data attributes, element IDs, and post links) are normalized to a single canonical form, so the same post is never recorded twice.
+Bookmarks are stored with the browser's `chrome.storage.sync` API, keyed by site origin. When you are signed into your browser, this carries your bookmarks to your other devices automatically through the browser's own encrypted sync; when you are signed out, it behaves like ordinary local storage on that device. If a site's bookmarks ever exceed the browser's per-site sync limit, the extension falls back to local storage for that site so nothing is lost. Each bookmark records the post's canonical numeric ID and the index page it was on when bookmarked. Post IDs from every source (data attributes, element IDs, and post links) are normalized to a single canonical form, so the same post is never recorded twice.
 
 ### Finding a moved post
 
@@ -108,7 +108,7 @@ The extension requests the narrowest set of permissions needed for its features:
 | Permission | Why it's needed |
 | --- | --- |
 | `contextMenus` | Adds the bookmark / remove / go-to entries to the right-click menu. |
-| `storage` | Saves your bookmarks locally so they persist across sessions. |
+| `storage` | Saves your bookmarks so they persist across sessions and, when you are signed into your browser, sync to your other devices. The same permission covers both local and synced storage. |
 | `host_permissions: <all_urls>` | Boorus exist on hundreds of independent, unpredictable domains. The extension can't enumerate them in advance, so it requests broad host access and detects boorus at runtime, exiting immediately on non-booru pages. Host access is used only to mark thumbnails and to fetch index pages of the same booru to locate a moved post. |
 
 The extension does **not** use remote code. All JavaScript and CSS is bundled in the package; no code is loaded or executed from any external server.
@@ -117,7 +117,7 @@ The extension does **not** use remote code. All JavaScript and CSS is bundled in
 
 ## Privacy
 
-Booru Bookmark collects nothing. All bookmark data lives in `chrome.storage.local` on your own machine and is never transmitted, sold, or shared. The only network requests the extension makes are to pages of the booru you're already viewing, in order to find where a bookmarked post has moved, and those requests carry no information about you. See [`PRIVACY.md`](PRIVACY.md) for the full policy.
+Booru Bookmark collects nothing. Your bookmarks are stored in your browser and, if you enable browser sync, synchronized to your other devices through the browser's built-in encrypted sync. They are never sent to the developer, sold, or shared. The only network requests the extension makes are to pages of the booru you're already viewing, in order to find where a bookmarked post has moved, and those requests carry no information about you. See [`PRIVACY.md`](PRIVACY.md) for the full policy.
 
 ---
 

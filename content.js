@@ -184,24 +184,64 @@
     }
   }
 
+  // Bookmarks live in chrome.storage.sync so they follow the user across every
+  // device signed into the browser, carried by the browser's own encrypted
+  // sync (never sent to the developer). sync uses the same "storage" permission
+  // as local, so this needs no extra permission. When the user is signed out,
+  // sync transparently behaves like local storage on that device.
+  //
+  // _loadedFromLocal records that this page read its bookmarks from the legacy
+  // local area (because sync had none yet), so init can promote that data up to
+  // sync exactly once.
+  let _loadedFromLocal = false;
+
   function loadBookmarks() {
     return new Promise(res => {
       if (!isExtensionAlive()) { res({}); return; }
       try {
-        chrome.storage.local.get(STORAGE_KEY, d => {
-          if (chrome.runtime.lastError) { res({}); return; }
-          res(d[STORAGE_KEY] || {});
+        chrome.storage.sync.get(STORAGE_KEY, d => {
+          if (!chrome.runtime.lastError && d && d[STORAGE_KEY] &&
+              Object.keys(d[STORAGE_KEY]).length) {
+            _loadedFromLocal = false;
+            res(d[STORAGE_KEY]);
+            return;
+          }
+          // Sync empty (or unavailable): fall back to legacy local data so
+          // existing users keep their bookmarks, and flag for promotion.
+          try {
+            chrome.storage.local.get(STORAGE_KEY, l => {
+              if (chrome.runtime.lastError) { res({}); return; }
+              const local = l[STORAGE_KEY] || {};
+              _loadedFromLocal = Object.keys(local).length > 0;
+              res(local);
+            });
+          } catch (_) { res({}); }
         });
       } catch (_) {
         res({});
       }
     });
   }
+
   function saveBookmarks(obj) {
     return new Promise(res => {
       if (!isExtensionAlive()) { res(); return; }
       try {
-        chrome.storage.local.set({ [STORAGE_KEY]: obj }, () => res());
+        chrome.storage.sync.set({ [STORAGE_KEY]: obj }, () => {
+          if (chrome.runtime.lastError) {
+            // Sync failed (most likely a quota limit for this site). Fall back
+            // to local so the bookmark is never silently lost. It stays on this
+            // device but is not lost.
+            try { chrome.storage.local.set({ [STORAGE_KEY]: obj }, () => res()); }
+            catch (_) { res(); }
+            return;
+          }
+          // Written to sync successfully. Clear any stale legacy local copy so a
+          // later sync failure can't resurrect deleted bookmarks from local.
+          try {
+            chrome.storage.local.remove(STORAGE_KEY, () => res());
+          } catch (_) { res(); }
+        });
       } catch (_) {
         res();
       }
@@ -1367,7 +1407,11 @@
   (async () => {
     const stored = await loadBookmarks();
     const { migrated, changed } = migrateBookmarkKeys(stored);
-    if (changed) await saveBookmarks(migrated);
+    // Save if the keys changed OR if we read from the legacy local area (which
+    // means sync had nothing yet); saveBookmarks writes to sync and clears the
+    // stale local copy, promoting existing users' bookmarks to cross-device
+    // sync automatically on first run of this build.
+    if (changed || _loadedFromLocal) await saveBookmarks(migrated);
 
     runRestore().then(() => {
       refreshJumpToast();
@@ -1375,6 +1419,18 @@
       maybeShowDeletedNotice();
     });
   })();
+
+  // Live cross-device updates: when the same key changes in sync (a bookmark
+  // added or removed on another device), re-apply borders and refresh the jump
+  // toast so the change shows up here without a manual reload.
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "sync") return;
+      if (!changes[STORAGE_KEY]) return;
+      scheduleRestore();
+      refreshJumpToast();
+    });
+  } catch (_) { /* storage.onChanged unavailable: non-fatal */ }
 
   // MutationObserver: re-apply bookmarks when new thumbnails appear.
   // When a bookmarked node is removed (booru replaces it), detect it
