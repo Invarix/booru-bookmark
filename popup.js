@@ -7,21 +7,28 @@ const STORAGE_PFX = "booru_bm_";
 async function readSite(storageKey) {
   try {
     const s = await chrome.storage.sync.get(storageKey);
-    if (s && s[storageKey] && Object.keys(s[storageKey]).length) return s[storageKey];
-  } catch (_) { /* fall through to local */ }
+    // A key PRESENT in sync is authoritative even when empty (tombstone from a
+    // deliberate clear). Only fall back to the mirror when the key is absent.
+    if (s && (storageKey in s)) return s[storageKey] || {};
+  } catch (_) { /* fall through to mirror */ }
   try {
     const l = await chrome.storage.local.get(storageKey);
     return l[storageKey] || {};
   } catch (_) { return {}; }
 }
 
-// Remove keys from BOTH areas so a clear is total and can't be resurrected by a
-// stale copy in the other area.
-async function removeEverywhere(keys) {
+// Clear sites by writing an EMPTY OBJECT (a tombstone) to sync and emptying the
+// local mirror. The tombstone makes a deliberate clear distinguishable from a
+// storage purge: reads treat a present-but-empty sync key as authoritative, so
+// a stale mirror on another device can never resurrect cleared bookmarks,
+// while a truly absent key still lets the mirror restore after a purge.
+async function clearEverywhere(keys) {
   const arr = Array.isArray(keys) ? keys : [keys];
   if (!arr.length) return;
-  try { await chrome.storage.sync.remove(arr); }  catch (_) {}
-  try { await chrome.storage.local.remove(arr); } catch (_) {}
+  const tombstones = {};
+  arr.forEach(k => { tombstones[k] = {}; });
+  try { await chrome.storage.sync.set(tombstones); }  catch (_) {}
+  try { await chrome.storage.local.set(tombstones); } catch (_) {}
 }
 
 // Collect every booru_bm_ key present in either area.
@@ -77,7 +84,7 @@ async function allSiteKeys() {
 
   // Clear this site's bookmarks (both areas)
   document.getElementById("btn-clear-page").addEventListener("click", async () => {
-    await removeEverywhere(storageKey);
+    await clearEverywhere(storageKey);
     chrome.tabs.sendMessage(tab.id, { type: "CLEAR_ALL" }).catch(() => {});
     bmCountEl.textContent = "0";
     emptyEl.style.display = "flex";
@@ -87,7 +94,7 @@ async function allSiteKeys() {
   // Clear ALL bookmarks across every booru site (both areas)
   document.getElementById("btn-clear-all").addEventListener("click", async () => {
     const keys = await allSiteKeys();
-    await removeEverywhere(keys);
+    await clearEverywhere(keys);
     chrome.tabs.sendMessage(tab.id, { type: "CLEAR_ALL" }).catch(() => {});
     bmCountEl.textContent = "0";
     emptyEl.style.display = "flex";

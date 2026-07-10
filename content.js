@@ -184,15 +184,28 @@
     }
   }
 
-  // Bookmarks live in chrome.storage.sync so they follow the user across every
-  // device signed into the browser, carried by the browser's own encrypted
-  // sync (never sent to the developer). sync uses the same "storage" permission
-  // as local, so this needs no extra permission. When the user is signed out,
-  // sync transparently behaves like local storage on that device.
+  // Bookmarks live in chrome.storage.sync so they can follow the user across
+  // devices where the browser supports syncing extension data, carried by the
+  // browser's own encrypted sync (never sent to the developer). sync uses the
+  // same "storage" permission as local, so this needs no extra permission.
   //
-  // _loadedFromLocal records that this page read its bookmarks from the legacy
-  // local area (because sync had none yet), so init can promote that data up to
-  // sync exactly once.
+  // WRITE-THROUGH MIRRORING: every save writes the same data to BOTH sync and
+  // local. The local copy is a persistent on-device backup and is never
+  // deleted. This matters because browsers can purge an extension's sync area
+  // (some browsers do not round-trip extension data through their sync service
+  // at all, and unpacked developer builds have no cloud copy), and a purge must
+  // never cost the user their bookmarks.
+  //
+  // TOMBSTONES: a deliberate clear writes an EMPTY OBJECT to sync rather than
+  // removing the key. That makes a purge (key absent) distinguishable from a
+  // clear (key present, empty). Reads treat a present key as authoritative,
+  // even when empty, so a stale mirror can never resurrect bookmarks the user
+  // deliberately deleted. Only when the key is entirely absent from sync does
+  // the local mirror restore, which is exactly the purge/fresh-install case
+  // where restoring is what the user wants.
+  //
+  // _loadedFromLocal records that this read came from the mirror (sync had no
+  // key), so init re-promotes the mirror to sync once.
   let _loadedFromLocal = false;
 
   function loadBookmarks() {
@@ -200,20 +213,20 @@
       if (!isExtensionAlive()) { res({}); return; }
       try {
         chrome.storage.sync.get(STORAGE_KEY, d => {
-          if (!chrome.runtime.lastError && d && d[STORAGE_KEY] &&
-              Object.keys(d[STORAGE_KEY]).length) {
+          if (!chrome.runtime.lastError && d && (STORAGE_KEY in d)) {
+            // Key present in sync: authoritative, even if empty (tombstone).
             _loadedFromLocal = false;
-            res(d[STORAGE_KEY]);
+            res(d[STORAGE_KEY] || {});
             return;
           }
-          // Sync empty (or unavailable): fall back to legacy local data so
-          // existing users keep their bookmarks, and flag for promotion.
+          // Key absent from sync (fresh device, purge, or sync unavailable):
+          // fall back to the on-device mirror and flag for re-promotion.
           try {
             chrome.storage.local.get(STORAGE_KEY, l => {
               if (chrome.runtime.lastError) { res({}); return; }
-              const local = l[STORAGE_KEY] || {};
-              _loadedFromLocal = Object.keys(local).length > 0;
-              res(local);
+              const mirror = l[STORAGE_KEY] || {};
+              _loadedFromLocal = Object.keys(mirror).length > 0;
+              res(mirror);
             });
           } catch (_) { res({}); }
         });
@@ -228,22 +241,17 @@
       if (!isExtensionAlive()) { res(); return; }
       try {
         chrome.storage.sync.set({ [STORAGE_KEY]: obj }, () => {
-          if (chrome.runtime.lastError) {
-            // Sync failed (most likely a quota limit for this site). Fall back
-            // to local so the bookmark is never silently lost. It stays on this
-            // device but is not lost.
-            try { chrome.storage.local.set({ [STORAGE_KEY]: obj }, () => res()); }
-            catch (_) { res(); }
-            return;
-          }
-          // Written to sync successfully. Clear any stale legacy local copy so a
-          // later sync failure can't resurrect deleted bookmarks from local.
+          // Regardless of the sync write's outcome (it can fail on quota),
+          // ALWAYS write the local mirror so the data survives on this device.
+          void chrome.runtime.lastError; // consume; sync failure is non-fatal
           try {
-            chrome.storage.local.remove(STORAGE_KEY, () => res());
+            chrome.storage.local.set({ [STORAGE_KEY]: obj }, () => res());
           } catch (_) { res(); }
         });
       } catch (_) {
-        res();
+        // sync API itself unavailable: still persist locally.
+        try { chrome.storage.local.set({ [STORAGE_KEY]: obj }, () => res()); }
+        catch (_) { res(); }
       }
     });
   }
@@ -1421,12 +1429,21 @@
   })();
 
   // Live cross-device updates: when the same key changes in sync (a bookmark
-  // added or removed on another device), re-apply borders and refresh the jump
-  // toast so the change shows up here without a manual reload.
+  // added or removed on another device), update the on-device mirror to match,
+  // then re-apply borders and refresh the jump toast so the change shows up
+  // here without a manual reload.
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "sync") return;
       if (!changes[STORAGE_KEY]) return;
+      try {
+        const next = changes[STORAGE_KEY].newValue;
+        if (next !== undefined) {
+          chrome.storage.local.set({ [STORAGE_KEY]: next }, () => {
+            void chrome.runtime.lastError;
+          });
+        }
+      } catch (_) { /* mirror update is best-effort */ }
       scheduleRestore();
       refreshJumpToast();
     });
