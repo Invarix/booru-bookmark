@@ -1051,6 +1051,13 @@
       const batch = [];
       for (let p = start; p < start + BATCH && p <= hi; p++) batch.push(p);
 
+      // Keep the user informed: toasts expire after a couple of seconds while a
+      // wide sweep can run much longer, and a silent search reads as a dead
+      // click. Refresh progress each batch after the first.
+      if (start > lo) {
+        showToast("Still searching... checking pages " + start + "-" + batch[batch.length - 1], "info");
+      }
+
       const hit = await new Promise((resolve) => {
         let pending = batch.length;
         let found = null;
@@ -1065,7 +1072,17 @@
       if (hit !== null) {
         sessionStorage.setItem("booru_bm_autojump", "1");
         sessionStorage.setItem("booru_bm_walked", "1");
-        navigateTo(buildIndexPageUrl(bookmarkPageUrl, hit));
+        const dest = buildIndexPageUrl(bookmarkPageUrl, hit);
+        // Same-URL destinations must hard-reload; see goToPage for rationale.
+        try {
+          const t = new URL(dest, location.origin);
+          const h = new URL(location.href);
+          if (t.origin === h.origin && t.pathname === h.pathname && t.search === h.search) {
+            location.reload();
+            return true;
+          }
+        } catch (_) { /* fall through */ }
+        navigateTo(dest);
         return true;
       }
     }
@@ -1120,7 +1137,20 @@
     const goToPage = (pageNum) => {
       sessionStorage.setItem("booru_bm_autojump", "1");
       sessionStorage.setItem("booru_bm_walked", "1");
-      navigateTo(buildIndexPageUrl(bookmarkPageUrl, pageNum));
+      const dest = buildIndexPageUrl(bookmarkPageUrl, pageNum);
+      // If the destination is the page the user is already viewing, a normal
+      // navigation can no-op or restore the same cached (stale) DOM snapshot,
+      // leaving the page visibly unchanged. Force a real reload instead so the
+      // fresh DOM renders, restore borders the post, and autojump scrolls to it.
+      try {
+        const t = new URL(dest, location.origin);
+        const h = new URL(location.href);
+        if (t.origin === h.origin && t.pathname === h.pathname && t.search === h.search) {
+          location.reload();
+          return;
+        }
+      } catch (_) { /* URL parse failure: fall through to normal navigation */ }
+      navigateTo(dest);
     };
 
     const notFound = () => {
@@ -1152,7 +1182,19 @@
       let page1 = null;
       const currentPageNum = pageNumOf(location.href);
       const liveInfo = livePageInfo();
-      const onListingNow = sameListing(bookmarkPageUrl) && liveInfo.count > 0 && liveInfo.maxNum !== null;
+      let onListingNow = sameListing(bookmarkPageUrl) && liveInfo.count > 0 && liveInfo.maxNum !== null;
+
+      // STALENESS GUARD: a long-lived tab holds a DOM snapshot from load time.
+      // A bookmark that just synced in from another device can reference a post
+      // NEWER than anything in that snapshot (its ID exceeds the snapshot's
+      // maximum). Anchoring or bracket-seeding the search from that stale DOM
+      // poisons it: the fast path disqualifies itself and the search collapses
+      // into the slow exhaustive sweep. If the target is newer than everything
+      // the live page shows, the live DOM cannot be trusted; fall through to
+      // fresh network fetches instead.
+      if (onListingNow && targetNum > liveInfo.maxNum) {
+        onListingNow = false;
+      }
 
       if (currentPageNum === 1 && onListingNow) {
         // We're already viewing page 1 of the right listing; use it directly.
