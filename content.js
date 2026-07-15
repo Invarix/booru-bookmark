@@ -345,6 +345,17 @@
   // searches for a bookmark so the border can only ever land on a thumbnail.
   function isThumbWrapper(node) {
     if (!node) return false;
+    // Never treat anything inside a transient hover overlay as a thumbnail.
+    // Some engines show a floating preview card when a thumbnail is hovered,
+    // and that card contains vote/score widgets stamped with the post's own
+    // numeric id. Those widgets would otherwise match a bookmarked post and
+    // get bordered. Real index thumbnails are never mounted inside a floating
+    // tooltip container, so excluding overlay subtrees is safe on every engine.
+    // Covers tippy.js (div[data-tippy-root] > .tippy-box), jQuery UI, and
+    // generic role="tooltip" containers.
+    if (node.closest?.('[data-tippy-root], .tippy-box, [role="tooltip"], .ui-tooltip')) {
+      return false;
+    }
     const tag = node.tagName?.toLowerCase();
     const cls = node.classList;
     const ds  = node.dataset;
