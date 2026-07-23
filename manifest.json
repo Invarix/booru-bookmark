@@ -1,44 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Socialnamer",
-  "version": "0.5.2",
-  "description": "Smart filenames for images saved from X, Bluesky, Mastodon, Pixiv, and online galleries. Converts WebP to PNG or JPG.",
-  "icons": {
-    "16": "icon16.png",
-    "32": "icon32.png",
-    "48": "icon48.png",
-    "128": "icon128.png"
-  },
-  "action": {
-    "default_title": "Download with Socialnamer",
-    "default_icon": {
-      "16": "icon16.png",
-      "32": "icon32.png",
-      "48": "icon48.png",
-      "128": "icon128.png"
-    }
-  },
+  "name": "Booru Bookmark",
+  "version": "1.4.3",
+  "description": "Right-click any booru image thumbnail to bookmark it with a red border, so you always know where you left off.",
   "permissions": [
     "contextMenus",
-    "downloads",
-    "declarativeNetRequestWithHostAccess",
-    "storage",
-    "scripting"
+    "storage"
   ],
   "host_permissions": [
-    "https://x.com/*",
-    "https://twitter.com/*",
-    "https://bsky.app/*",
-    "https://*.twimg.com/*",
-    "https://*.bsky.app/*",
-    "https://pawoo.net/*",
-    "https://*.pawoo.net/*",
-    "https://baraag.net/*",
-    "https://*.baraag.net/*",
-    "https://www.pixiv.net/*",
-    "https://i.pximg.net/*",
-    "https://e621.net/*",
-    "https://*.e621.net/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
@@ -46,26 +16,28 @@
   "content_scripts": [
     {
       "matches": [
-        "https://x.com/*",
-        "https://twitter.com/*",
-        "https://bsky.app/*",
-        "https://pawoo.net/*",
-        "https://baraag.net/*",
-        "https://www.pixiv.net/*",
-        "https://e621.net/*"
+        "<all_urls>"
       ],
       "js": [
         "content.js"
       ],
-      "run_at": "document_idle",
-      "all_frames": true
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
     }
   ],
-  "optional_host_permissions": [
-    "https://*/*"
-  ],
-  "options_ui": {
-    "page": "options.html",
-    "open_in_tab": true
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   }
 }
