@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Socialnamer - Settings</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        max-width: 640px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      h1 { font-size: 1.3rem; margin-bottom: 0.2rem; }
+      p.muted { opacity: 0.75; font-size: 0.92rem; }
+      .row { display: flex; gap: 0.5rem; margin: 1.2rem 0 0.4rem; }
+      input[type="text"] {
+        flex: 1; padding: 0.55rem 0.7rem; font-size: 1rem;
+        border: 1px solid rgba(127,127,127,0.5); border-radius: 8px;
+        background: transparent; color: inherit;
+      }
+      button {
+        padding: 0.55rem 1rem; font-size: 0.95rem; border: 0; border-radius: 8px;
+        background: #4f46e5; color: #fff; cursor: pointer;
+      }
+      button.secondary { background: rgba(127,127,127,0.25); color: inherit; }
+      ul { list-style: none; padding: 0; margin: 1rem 0; }
+      li {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 0.55rem 0.7rem; border: 1px solid rgba(127,127,127,0.25);
+        border-radius: 8px; margin-bottom: 0.5rem;
+      }
+      li code { font-size: 0.95rem; }
+      li button { background: transparent; color: #d05; padding: 0.3rem 0.5rem; }
+      .empty { opacity: 0.6; font-style: italic; }
+      #msg { min-height: 1.2rem; font-size: 0.88rem; margin-top: 0.3rem; }
+      #msg.err { color: #d05; }
+      #msg.ok { color: #2e9e4b; }
+      .note {
+        border-left: 3px solid rgba(127,127,127,0.5);
+        padding-left: 0.8rem; margin: 1.5rem 0; font-size: 0.9rem; opacity: 0.9;
+      }
+      code { background: rgba(127,127,127,0.18); padding: 0 0.25rem; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <h1>Socialnamer</h1>
+    <p class="muted">
+      X, Bluesky, Pixiv, and Mastodon work out of the box. Add other galleries
+      here to enable smart filenames on them too.
+    </p>
+
+    <div class="row">
+      <input
+        type="text"
+        id="domain"
+        placeholder="example.net"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button id="add">Add site</button>
+    </div>
+    <div id="msg"></div>
+
+    <ul id="list"></ul>
+
+    <div class="note">
+      <p><strong>How added sites work</strong></p>
+      <p>
+        When you add a site, your browser asks permission to access it - approve
+        it to continue. On sites that expose a standard per-post metadata
+        endpoint, filenames are built from the descriptive tag categories; on
+        others the filename is cleaned from the image URL. Removing a site
+        revokes that access again.
+      </p>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>

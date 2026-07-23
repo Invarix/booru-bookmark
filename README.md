@@ -1,155 +1,122 @@
-# Booru Bookmark
+[![Support on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/invarix)
 
-A Chromium (Manifest V3) browser extension that lets you bookmark image thumbnails on booru-style image boards with a bright red border, so you always know where you left off, even after a post has drifted to a different index page.
+# Socialnamer (MV3)
 
-Right-click any thumbnail to bookmark it. The thumbnail gets a distinctive red border, your bookmarks persist across sessions, and a one-click "Navigate Bookmarks" button takes you back to a bookmarked image, automatically finding and scrolling to it even if new uploads have pushed it onto a later page.
+Right-click an image on X/Twitter, Bluesky, Pixiv, a supported Mastodon
+instance, or an online gallery -> **Download with Socialnamer**. It opens a
+save dialog with an editable filename field, pre-filled from the post -
+artist/poster, handle, tags, and description keywords - and can convert the
+file out of webp on the way down. No more `HiJKlMNoP.jpg`.
 
-If you find this extension useful, you can support its development on Ko-fi:
+You can also add your own gallery sites from the settings page (below).
 
-[![Support me on Ko-fi](https://img.shields.io/badge/Support%20me%20on-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/invarix)
+## Filename
 
----
+Parts are joined by underscores into a flat filename.
 
-## Features
+1. Poster/artist name, then handle, then any artist shout-out from the caption
+   (`art by @x`, `src: @y`, @mentions), then hashtags.
+2. Up to four meaningful keywords from the post text (stopwords, mentions, and
+   links excluded) - a caption like "Character doodle #fanart" yields
+   `fanart_Character_doodle`.
+3. If the poster wrote an image description (alt text), up to four keywords
+   from it are appended. Placeholder values like X's `alt="Image"` are ignored,
+   and words already present aren't repeated. (This is the description written
+   on the post - social sites strip EXIF metadata on upload, so there's nothing
+   usable inside the image file itself.)
+4. Multi-image posts get a position suffix in display order - the first of four
+   saves as `...01.jpg`, the fourth as `...04.jpg`. Single-image posts have no
+   suffix.
+5. Nothing found -> falls back to the site's random string (e.g. the media id),
+   so you never get a worse name than the default.
 
-- **One-click bookmarking** via the right-click context menu on any thumbnail.
-- **Persistent visual markers**: bookmarked thumbnails get a thick red border with a contrast halo so they stand out against any thumbnail color.
-- **Cross-page navigation**: if a bookmarked post has moved to a different index page since you saved it, the extension locates the page it's on now and takes you there.
-- **Automatic scroll-to-bookmark**: after navigating, the page scrolls to and pulses the bookmarked thumbnail, re-centering as the page finishes loading.
-- **Deleted-post detection**: if a bookmarked post no longer exists anywhere in the index, you're returned to its last known page with a clear notice.
-- **Works on many boorus, not a fixed list**: the extension detects booru sites at runtime by their page structure rather than relying on a hardcoded domain list.
-- **Syncs across your devices, still private**: bookmarks are stored in the browser's own storage and, if you are signed into the browser, follow you to your other devices through the browser's built-in encrypted sync. Nothing is ever sent to the developer.
+Character safety: accented and non-Latin letters are kept (`Māui`, `José`,
+`日本語`). `@` and `#` are dropped, and anything illegal on Windows or Linux
+(`\ / : * ? " < > |`, control chars, emoji, other symbols) becomes an
+underscore, so the name is always safe to write to disk. Windows reserved
+device names (`CON`, `PRN`, ...) are guarded.
 
----
+Per-site notes: on Bluesky the `.bsky.social` suffix is trimmed and a handle
+that merely repeats the display name is dropped. On Pixiv the filename is the
+artist, the title, and the first line of the description (the long tag list is
+omitted). Online galleries that expose a per-post metadata endpoint use the
+descriptive tag categories (artist, copyright, character, species) and omit the
+large alphabetical "general" bucket.
 
-## Supported boorus
+Saving from a direct media URL (an image opened in its own tab) still works: if
+the tab you came from is open, the extension finds the post there by the file's
+rendition-stable name. Without such a tab, Bluesky posts are recovered via the
+public AppView API and Pixiv artworks via pixiv's public artwork endpoint;
+other sites fall back to the file hash.
 
-The extension identifies booru sites by detecting the underlying engine, so it works across the major booru software families and the many sites built on them:
+## Adding your own sites
 
-| Engine family | Post URL pattern | Example sites |
-| --- | --- | --- |
-| Gelbooru family | `index.php?page=post&s=view&id=N` | Gelbooru, Safebooru, booru.org-hosted sites |
-| Danbooru family | `/posts/N` | Danbooru, e621 |
-| Shimmie2 | `/post/view/N` | r34 paheal, Pixboard |
-| Moebooru | `/post/show/N` | yande.re, Konachan |
-| Philomena | `/images/N` | Derpibooru, Furbooru |
+X, Bluesky, Pixiv, and Mastodon work out of the box. To enable Socialnamer on
+another gallery, open the extension's options page (Extensions -> Socialnamer
+-> Details -> Extension options), type the site's domain, and approve the
+access prompt your browser shows. On sites that expose a standard per-post
+metadata endpoint the filename uses the descriptive tag categories; on others
+it is cleaned from the image URL. Removing a site revokes that access again.
+The list of sites you add is stored locally on your device and never leaves it.
 
-On any page that isn't a booru, the content script detects this and exits immediately, doing nothing.
+## Format conversion (the webp fix)
 
----
+The submenu gives three choices - picked **before** the save dialog, because an
+extension can't add controls inside the OS Save As window:
 
-## Installation
+| Item | Behavior |
+|------|----------|
+| **Keep original format** | saved byte-for-byte, with a corrected extension |
+| **Force JPG** | re-encode to JPEG (transparency flattened onto white, q=0.95) |
+| **Force PNG** | re-encode to PNG (lossless) |
 
-### From source (developer mode)
+Format is detected by **sniffing the file's magic bytes**, not the URL -
+Bluesky serves webp under a `...@jpeg` URL via content negotiation, so the
+extension would lie. Conversion uses `OffscreenCanvas` in the background.
+Re-encoding a webp recovers the pixels, not the photographer's original file -
+there's no original hiding behind the webp to get back to.
 
-1. Download or clone this repository.
-2. Open `chrome://extensions` in your Chromium-based browser (Chrome, Edge, Brave, etc.).
-3. Enable **Developer mode** (top-right toggle).
-4. Click **Load unpacked** and select the `booru-bookmark` folder.
-5. The extension icon appears in your toolbar.
+> Converted files are handed to the download as a blob URL where the background
+> supports it, with a base64 data URL as the fallback (a service worker can't
+> mint blob URLs). Normal social images are fine either way; if an unusually
+> large PNG re-encode ever fails, use **Keep original**.
 
-> **Note:** When updating to a new version in developer mode, load the new folder fresh rather than relying on a page refresh. Browsers cache the old content script in already-open tabs, so close and reopen any booru tabs after updating.
+## Install
 
----
-
-## Usage
-
-### Bookmarking an image
-
-1. Right-click any thumbnail on a booru index page.
-2. Choose **📌 Bookmark Image** from the context menu.
-3. The thumbnail gains a red border, and a **Navigate Bookmarks** button appears in the bottom-right corner.
-
-### Returning to a bookmark
-
-- Click the **Navigate Bookmarks** button in the bottom-right corner, **or**
-- Right-click any thumbnail and choose **🔍 Go to Bookmark**.
-
-If the bookmark is on your current page, it scrolls straight to it. If it has moved to another page, the extension finds the correct page, navigates there, and scrolls to the thumbnail automatically. Repeated clicks cycle through all of your bookmarks for that site.
-
-### Removing bookmarks
-
-- Right-click a bookmarked thumbnail and choose **✖ Remove Bookmark**, **or**
-- Right-click anywhere and choose **🗑 Clear All Bookmarks on This Page**, **or**
-- Open the toolbar popup to clear the current site's bookmarks or all bookmarks across every site.
-
-### The popup
-
-Clicking the toolbar icon opens a popup showing the current site's name, your bookmark count for that site, a jump button, and buttons to clear bookmarks for the current site or everywhere.
-
----
-
-## How it works
-
-### Detection
-
-Rather than maintaining a list of booru domains, the content script inspects each page for booru engine signatures: engine meta tags, characteristic CSS classes and DOM structures, and clusters of thumbnail links matching known post-URL patterns. If three or more thumbnail links match a known engine pattern (or an engine marker is present), the page is treated as a booru. Otherwise the script exits and does nothing.
-
-### Storage
-
-Bookmarks are stored with the browser's `chrome.storage.sync` API, keyed by site origin. When you are signed into your browser, this carries your bookmarks to your other devices automatically through the browser's own encrypted sync; when you are signed out, it behaves like ordinary local storage on that device. If a site's bookmarks ever exceed the browser's per-site sync limit, the extension falls back to local storage for that site so nothing is lost. Each bookmark records the post's canonical numeric ID and the index page it was on when bookmarked. Post IDs from every source (data attributes, element IDs, and post links) are normalized to a single canonical form, so the same post is never recorded twice.
-
-### Finding a moved post
-
-Boorus order their default index by post ID descending, so a post's page position is monotonic in its ID. As new posts are uploaded, older posts drift toward higher page numbers. When you navigate to a bookmark that isn't on the current page, the extension:
-
-1. **Binary searches** the index by post ID. It fetches a probe page, reads the range of post IDs on it, and decides whether the target is on an earlier or later page, halving the search space each step. This finds a post hundreds of pages deep in roughly 15 to 20 page fetches instead of hundreds.
-2. **Falls back to a linear sweep** if the binary search concludes the post isn't found. Because custom sort orders or unusual markup can occasionally violate the ID-ordering assumption, an exhaustive sweep verifies the result before any "deleted" conclusion, so a bookmarked post that still exists is never falsely reported as gone.
-3. **Reports deletion** only after the sweep confirms the post is absent from the index, returning you to its last known page with a notice.
-
-These page lookups are plain `fetch()` requests to other pages of the same booru you're already browsing; the extension reads their existing HTML to locate the post and runs no remote code.
-
----
+Chrome/Chromium: `chrome://extensions` -> **Developer mode** -> **Load
+unpacked** -> pick this folder. Firefox: `about:debugging` -> **Load Temporary
+Add-on** -> pick this folder's `manifest.json` (temporary installs clear on
+restart; sign through AMO for a permanent one).
 
 ## Permissions
 
-The extension requests the narrowest set of permissions needed for its features:
+- `contextMenus`, `downloads`: the menu item and the save dialog.
+- `storage`: remembers the gallery sites you add (local only).
+- `scripting`: runs Socialnamer on the gallery sites you add.
+- `declarativeNetRequestWithHostAccess`: sets the Referer header that a couple
+  of image hosts require, scoped to those hosts.
+- Host access to the built-in sites and their image hosts: read the post and
+  fetch the image to rename and convert it.
+- Optional, per-domain host access: requested only in the moment you add a site.
 
-| Permission | Why it's needed |
-| --- | --- |
-| `contextMenus` | Adds the bookmark / remove / go-to entries to the right-click menu. |
-| `storage` | Saves your bookmarks so they persist across sessions and, when you are signed into your browser, sync to your other devices. The same permission covers both local and synced storage. |
-| `host_permissions: <all_urls>` | Boorus exist on hundreds of independent, unpredictable domains. The extension can't enumerate them in advance, so it requests broad host access and detects boorus at runtime, exiting immediately on non-booru pages. Host access is used only to mark thumbnails and to fetch index pages of the same booru to locate a moved post. |
+## Maintenance
 
-The extension does **not** use remote code. All JavaScript and CSS is bundled in the package; no code is loaded or executed from any external server.
+Per-site extractors live at the top of `content.js`, matched by hostname; the
+first match wins, and named sites are ordered ahead of the generic gallery and
+fallback extractors. To add a built-in site, add an extractor and register its
+domain in `matches` (manifest), `SITE_PATTERNS` (background.js), and
+`host_permissions`. User-added sites are handled separately via the options
+page and dynamic registration, isolated from the built-in paths.
 
----
-
-## Privacy
-
-Booru Bookmark collects nothing. Your bookmarks are stored in your browser and, if you enable browser sync, synchronized to your other devices through the browser's built-in encrypted sync. They are never sent to the developer, sold, or shared. The only network requests the extension makes are to pages of the booru you're already viewing, in order to find where a bookmarked post has moved, and those requests carry no information about you. See [`PRIVACY.md`](PRIVACY.md) for the full policy.
-
----
-
-## Project structure
+## Files
 
 ```
-booru-bookmark/
-├── manifest.json      Extension manifest (MV3)
-├── background.js      Service worker: context menus, message routing, tab tracking
-├── content.js         Core logic: detection, bookmarking, restore, navigation, search
-├── content.css        Bookmark border, toasts, and navigation button styling
-├── popup.html         Toolbar popup markup
-├── popup.js           Popup logic: per-site count, jump, clear actions
-└── icons/             Extension icons (16, 48, 128, 512 px)
+manifest.json          MV3; permissions above
+background.js          menu, format sniffing, conversion, save, user-site sync
+content.js             per-site extractors (top of file) + filename assembly
+options.html/.js       settings page for user-added sites
+icon16/32/48/128.png   toolbar + store icons
+PRIVACY.md             privacy policy
 ```
 
----
-
-## Development
-
-The core logic lives in `content.js`. Detection signatures, the canonical post-ID normalizer, and the page-search algorithm are the areas most likely to need extension when adapting to a new or unusual booru engine. Site-specific DOM extraction is the most fragile layer; if a particular booru misbehaves, that's the first place to look.
-
-After making changes, reload the unpacked extension and reopen any booru tabs so the new content script is injected (browsers cache the old one in open tabs).
-
----
-
-## Compatibility
-
-Works in any Chromium-based browser that supports Manifest V3, including Google Chrome, Microsoft Edge, Brave, Opera, and Vivaldi.
-
----
-
-## License
-
-See [`LICENSE`](LICENSE) for details.
+[![Support on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/invarix)
