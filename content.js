@@ -87,6 +87,25 @@
   let _pendingJumpId = null;
   let _pendingTimer  = null; // timeout to navigate if pending jump never resolves
   let _jumpInFlight  = false; // true while a cross-page search is running
+  // True for a short window after page load, during which a zero local bookmark
+  // count might still be resolved by an incoming cross-device sync. Drives the
+  // nav button's "Bookmark Sync in Progress" state. Opened at load, closed once
+  // the sync window elapses.
+  // The cross-device sync wait should appear only on the FIRST page a user
+  // opens on this device in this browsing session, not on every page they click
+  // through. sessionStorage is per-tab and per-origin and clears when the
+  // session ends, so a flag there distinguishes "just arrived on this site" from
+  // "casually paging through the index". Once consumed, the syncing state never
+  // shows again until a new session.
+  const SYNC_SEEN_KEY = "booru_bm_sync_window_used";
+  let _withinSyncWindow = (() => {
+    try {
+      if (sessionStorage.getItem(SYNC_SEEN_KEY)) return false; // already used this session
+      return true;
+    } catch (_) {
+      return false; // if sessionStorage is unavailable, never show the wait
+    }
+  })();
 
   // ── True page URL detection ───────────────────────────────────────────────
   // location.href is unreliable for storing the bookmark's page boorus
@@ -628,6 +647,24 @@
   }
 
   // ── Nav button ─────────────────────────────────────────────────────────────
+  //
+  // The nav button has three states:
+  //   - hidden:  no bookmarks for this site, or we are on a post page.
+  //   - syncing: at page load the local count is 0, but bookmarks made on
+  //              another device may still be arriving via browser sync. Rather
+  //              than show nothing (which looks like "no bookmarks"), we show a
+  //              non-clickable "Bookmark Sync in Progress" state for a short
+  //              window. If synced data lands (the storage.onChanged listener
+  //              fires), it flips to the navigate state; if the window passes
+  //              with nothing, it hides (genuinely no bookmarks here).
+  //   - navigate: "Navigate Bookmarks [N]", clickable, runs jumpToBookmark.
+  const JUMP_STATE = { HIDDEN: "hidden", SYNCING: "syncing", NAVIGATE: "navigate" };
+  let _jumpState = JUMP_STATE.HIDDEN;
+  let _syncWindowTimer = null;
+  // How long after load to keep showing "syncing" before giving up on a pending
+  // cross-device sync and concluding there are simply no bookmarks here. Kept
+  // short so a user who genuinely has no bookmarks sees only a brief flash.
+  const SYNC_WAIT_MS = 4000;
 
   function getJumpToast() {
     let el = document.getElementById("booru-bookmark-jump-toast");
@@ -635,23 +672,99 @@
       el = document.createElement("div");
       el.id = "booru-bookmark-jump-toast";
       document.documentElement.appendChild(el);
-      el.addEventListener("click", () => jumpToBookmark());
+      el.addEventListener("click", () => {
+        // Only actionable in the navigate state; a click while syncing is a
+        // no-op with a brief explanation.
+        if (_jumpState === JUMP_STATE.SYNCING) {
+          showToast("Waiting for bookmarks to sync from your other devices...", "info");
+          return;
+        }
+        jumpToBookmark();
+      });
     }
     if (el.parentElement !== document.documentElement)
       document.documentElement.appendChild(el);
     return el;
   }
 
-  function showJumpToast()             { getJumpToast().classList.add("visible"); }
-  function hideJumpToast()             { document.getElementById("booru-bookmark-jump-toast")?.classList.remove("visible"); }
-  function updateJumpToastLabel(count) { getJumpToast().textContent = `Navigate Bookmarks [${count}]`; }
+  function showJumpToast() { getJumpToast().classList.add("visible"); }
+  function hideJumpToast() {
+    _jumpState = JUMP_STATE.HIDDEN;
+    const el = document.getElementById("booru-bookmark-jump-toast");
+    if (el) { el.classList.remove("visible"); el.classList.remove("syncing"); }
+  }
+
+  // Put the button into the navigate (clickable) state with the given count.
+  function setJumpNavigate(count) {
+    _jumpState = JUMP_STATE.NAVIGATE;
+    const el = getJumpToast();
+    el.classList.remove("syncing");
+    el.textContent = `Navigate Bookmarks [${count}]`;
+    el.classList.add("visible");
+  }
+
+  // Put the button into the syncing (non-clickable) state.
+  function setJumpSyncing() {
+    _jumpState = JUMP_STATE.SYNCING;
+    const el = getJumpToast();
+    el.classList.add("syncing");
+    el.textContent = "Bookmark Sync in Progress";
+    el.classList.add("visible");
+  }
+
+  // Backwards-compatible helper still used elsewhere.
+  function updateJumpToastLabel(count) { setJumpNavigate(count); }
 
   async function refreshJumpToast() {
+    // The navigate button belongs to index/catalog browsing. On a post's own
+    // page it is noise: bookmarking is declined there and borders never render
+    // there, so the button has nothing meaningful to do. Hide it, including
+    // any instance carried over from a previous page by soft navigation.
+    if (isSinglePostPage()) {
+      if (_syncWindowTimer) { clearTimeout(_syncWindowTimer); _syncWindowTimer = null; }
+      hideJumpToast();
+      return;
+    }
+
     const stored = await loadBookmarks();
     const total  = Object.keys(stored).length;
-    if (total === 0) { hideJumpToast(); return; }
-    updateJumpToastLabel(total);
-    showJumpToast();
+
+    if (total > 0) {
+      // We have bookmarks: show the real button and cancel any sync window.
+      if (_syncWindowTimer) { clearTimeout(_syncWindowTimer); _syncWindowTimer = null; }
+      setJumpNavigate(total);
+      return;
+    }
+
+    // Zero bookmarks locally. This is either genuinely empty, or a device that
+    // hasn't received a cross-device sync yet. Only show the syncing state when:
+    //   - sync is actually available (otherwise a "syncing" label would lie),
+    //   - we are still in the first-access window for this session, and
+    //   - this is the first time the window is used this session.
+    // Casual page-to-page browsing therefore never shows it; only the first
+    // page opened on the device in a session can, and only when there is truly
+    // nothing stored yet.
+    let syncUsable = false;
+    try { syncUsable = !!(chrome?.storage?.sync); } catch (_) { syncUsable = false; }
+
+    if (_withinSyncWindow && syncUsable) {
+      // Consume the one-shot session flag immediately so any later navigation in
+      // this session skips the syncing state entirely.
+      try { sessionStorage.setItem(SYNC_SEEN_KEY, "1"); } catch (_) {}
+
+      setJumpSyncing();
+      // Ensure a timer is running to hide the button if nothing arrives.
+      if (!_syncWindowTimer) {
+        _syncWindowTimer = setTimeout(() => {
+          _syncWindowTimer = null;
+          _withinSyncWindow = false;
+          // Re-evaluate: if still zero, hide; if data arrived, refresh shows it.
+          refreshJumpToast();
+        }, SYNC_WAIT_MS);
+      }
+    } else {
+      hideJumpToast();
+    }
   }
 
   // Persistent red error toast shown above the nav button when a bookmarked
@@ -1032,6 +1145,68 @@
   }
 
   // Fetch an index page once and extract: the set of post-ID keys on it, plus
+  // ── Polite fetch layer ────────────────────────────────────────────────────
+  // Some boorus run aggressive rate limiters that reject bursts of requests
+  // with HTTP 429 (or an interstitial). The page search can issue several
+  // fetches, so all index fetching goes through here, which does two things:
+  //   1. Serializes requests and spaces them by a minimum interval, so we never
+  //      fire a burst of parallel connections at one host.
+  //   2. On a 429 / 503 / 403, backs off and retries with exponential delay,
+  //      honoring a Retry-After header when present.
+  // This keeps a wide sweep slower-but-reliable rather than fast-but-blocked.
+  const MIN_FETCH_SPACING_MS = 350;   // minimum gap between requests to a host
+  const MAX_FETCH_RETRIES    = 4;
+  let _fetchChain = Promise.resolve(); // serializes fetches
+  let _lastFetchAt = 0;
+
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  // Schedule a paced fetch. Returns the Response, or null on give-up/error.
+  function politeFetch(url) {
+    const run = async () => {
+      // Space requests: wait until MIN_FETCH_SPACING_MS has elapsed since the
+      // previous one started.
+      const wait = _lastFetchAt + MIN_FETCH_SPACING_MS - Date.now();
+      if (wait > 0) await sleep(wait);
+
+      for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {
+        _lastFetchAt = Date.now();
+        let resp;
+        try {
+          resp = await fetch(url, { credentials: "include" });
+        } catch (_) {
+          // Network error: brief backoff then retry.
+          if (attempt < MAX_FETCH_RETRIES) { await sleep(600 * (attempt + 1)); continue; }
+          return null;
+        }
+
+        // Rate-limited or temporarily blocked: back off and retry.
+        if (resp.status === 429 || resp.status === 503 || resp.status === 403) {
+          if (attempt >= MAX_FETCH_RETRIES) return resp;
+          let delay = 800 * Math.pow(2, attempt); // 0.8s, 1.6s, 3.2s, 6.4s
+          const ra = resp.headers.get("retry-after");
+          if (ra) {
+            const secs = parseInt(ra, 10);
+            if (Number.isFinite(secs) && secs > 0) delay = Math.max(delay, secs * 1000);
+          }
+          // Surface a gentle notice so a slow, backing-off search isn't silent.
+          try { showToast("Site is rate-limiting, slowing down...", "info"); } catch (_) {}
+          await sleep(delay);
+          continue;
+        }
+        return resp;
+      }
+      return null;
+    };
+
+    // Chain so only one request is in flight at a time.
+    const scheduled = _fetchChain.then(run, run);
+    // Keep the chain alive regardless of this call's outcome.
+    _fetchChain = scheduled.then(() => {}, () => {});
+    return scheduled;
+  }
+
+  // Fetch an index page once and extract: the set of post-ID keys on it, plus
   // the numeric min/max of those IDs. The numeric range powers a binary search:
   // boorus order the default index by post ID DESCENDING, so a target ID higher
   // than a page's max means the post is on an EARLIER page, lower than its min
@@ -1039,8 +1214,8 @@
   // Returns { ids:[...], maxNum, minNum, count } - empty page => count 0.
   async function fetchPageInfo(pageUrl) {
     try {
-      const resp = await fetch(pageUrl, { credentials: "include" });
-      if (!resp.ok) return { ids: [], maxNum: null, minNum: null, count: 0 };
+      const resp = await politeFetch(pageUrl);
+      if (!resp || !resp.ok) return { ids: [], maxNum: null, minNum: null, count: 0 };
       const html = await resp.text();
       const doc  = new DOMParser().parseFromString(html, "text/html");
       return extractPageInfo(doc);
@@ -1057,33 +1232,20 @@
   async function linearSweep(postId, bookmarkPageUrl, fromPage, toPage) {
     const lo = Math.max(1, Math.min(fromPage, toPage));
     const hi = Math.max(fromPage, toPage);
-    const BATCH = 6;
-    for (let start = lo; start <= hi; start += BATCH) {
-      const batch = [];
-      for (let p = start; p < start + BATCH && p <= hi; p++) batch.push(p);
-
-      // Keep the user informed: toasts expire after a couple of seconds while a
-      // wide sweep can run much longer, and a silent search reads as a dead
-      // click. Refresh progress each batch after the first.
-      if (start > lo) {
-        showToast("Still searching... checking pages " + start + "-" + batch[batch.length - 1], "info");
+    // Requests are paced and serialized by politeFetch, so we scan sequentially
+    // and stop at the first hit. This avoids firing a burst of connections at
+    // hosts with strict rate limiters, at the cost of being a little slower on
+    // a wide sweep (which only happens as a fallback, not on the common path).
+    for (let p = lo; p <= hi; p++) {
+      // Progress feedback every few pages so a paced search isn't silent.
+      if (p > lo && (p - lo) % 4 === 0) {
+        showToast("Still searching... page " + p, "info");
       }
-
-      const hit = await new Promise((resolve) => {
-        let pending = batch.length;
-        let found = null;
-        for (const p of batch) {
-          fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, p)).then((info) => {
-            if (info.ids.includes(postId) && found === null) found = p;
-            if (--pending === 0) resolve(found);
-          }).catch(() => { if (--pending === 0) resolve(found); });
-        }
-      });
-
-      if (hit !== null) {
+      const info = await fetchPageInfo(buildIndexPageUrl(bookmarkPageUrl, p));
+      if (info.ids.includes(postId)) {
         sessionStorage.setItem("booru_bm_autojump", "1");
         sessionStorage.setItem("booru_bm_walked", "1");
-        const dest = buildIndexPageUrl(bookmarkPageUrl, hit);
+        const dest = buildIndexPageUrl(bookmarkPageUrl, p);
         // Same-URL destinations must hard-reload; see goToPage for rationale.
         try {
           const t = new URL(dest, location.origin);
@@ -1355,38 +1517,29 @@
       return;
     }
 
-    // ---- Fallback: concurrent linear scan (non-numeric IDs / odd engines) ----
+    // ---- Fallback: sequential outward linear scan (odd engines / non-numeric IDs)
     const onStartPage = sameIndexPage(buildIndexPageUrl(bookmarkPageUrl, startPage));
     const firstProbe  = onStartPage ? startPage + 1 : startPage;
     const LINEAR_MAX  = 300;
-    const BATCH_SIZE  = 6;
 
+    // Build an outward-spiraling page order from the best guess, then scan it
+    // one page at a time. Requests are paced by politeFetch, so this never
+    // bursts connections at a rate-limited host.
     const order = [firstProbe];
     for (let d = 1; d < LINEAR_MAX; d++) {
       if (firstProbe + d <= LINEAR_MAX) order.push(firstProbe + d);
       if (firstProbe - d >= 1)          order.push(firstProbe - d);
     }
 
-    let navigated = false;
-    for (let i = 0; i < order.length && !navigated; i += BATCH_SIZE) {
-      const batch = order.slice(i, i + BATCH_SIZE);
-      await new Promise((resolveWave) => {
-        let pending = batch.length;
-        for (const pageNum of batch) {
-          const url = buildIndexPageUrl(bookmarkPageUrl, pageNum);
-          pageContainsPost(url, postId).then((found) => {
-            if (found && !navigated) {
-              navigated = true;
-              goToPage(pageNum);
-              resolveWave();
-              return;
-            }
-            if (--pending === 0) resolveWave();
-          }).catch(() => { if (--pending === 0) resolveWave(); });
-        }
-      });
+    let scanned = 0;
+    for (const pageNum of order) {
+      scanned++;
+      if (scanned > 1 && scanned % 4 === 0) {
+        showToast("Still searching...", "info");
+      }
+      const found = await pageContainsPost(buildIndexPageUrl(bookmarkPageUrl, pageNum), postId);
+      if (found) { goToPage(pageNum); return; }
     }
-    if (navigated) return;
 
     notFound();
   }
@@ -1468,11 +1621,45 @@
   (async () => {
     const stored = await loadBookmarks();
     const { migrated, changed } = migrateBookmarkKeys(stored);
-    // Save if the keys changed OR if we read from the legacy local area (which
-    // means sync had nothing yet); saveBookmarks writes to sync and clears the
-    // stale local copy, promoting existing users' bookmarks to cross-device
-    // sync automatically on first run of this build.
-    if (changed || _loadedFromLocal) await saveBookmarks(migrated);
+
+    // Promotion of legacy local-only data to sync must be done CAREFULLY, or it
+    // races with sync propagation on a freshly-synced device and resurrects or
+    // duplicates bookmarks. We only promote when we are confident this is a
+    // genuine pre-sync local dataset, not a device still waiting for sync:
+    //   - _loadedFromLocal means sync had no key and the local mirror had data.
+    //   - Before writing that up, re-check sync one more time after a short
+    //     delay. If sync has since delivered a value for this key (propagation
+    //     arrived), we DEFER to sync and do not push our local copy, so a fresh
+    //     device never uploads stale/duplicate entries over incoming data.
+    if (changed || _loadedFromLocal) {
+      let shouldPromote = true;
+      if (_loadedFromLocal) {
+        shouldPromote = await new Promise((resolve) => {
+          if (!isExtensionAlive()) { resolve(false); return; }
+          // Give sync a moment to propagate, then re-check.
+          setTimeout(() => {
+            try {
+              chrome.storage.sync.get(STORAGE_KEY, (d) => {
+                if (!chrome.runtime.lastError && d && (STORAGE_KEY in d)) {
+                  // Sync now has authoritative data; do not overwrite it.
+                  resolve(false);
+                } else {
+                  resolve(true); // still nothing in sync: safe to promote
+                }
+              });
+            } catch (_) { resolve(false); }
+          }, 1200);
+        });
+      }
+      if (shouldPromote) {
+        await saveBookmarks(migrated);
+      } else {
+        // Sync won: adopt its value locally and refresh the UI to match.
+        await loadBookmarks();
+        refreshJumpToast();
+        scheduleRestore();
+      }
+    }
 
     runRestore().then(() => {
       refreshJumpToast();
@@ -1482,15 +1669,19 @@
   })();
 
   // Live cross-device updates: when the same key changes in sync (a bookmark
-  // added or removed on another device), update the on-device mirror to match,
-  // then re-apply borders and refresh the jump toast so the change shows up
-  // here without a manual reload.
+  // added or removed on another device), the SYNC value is authoritative. Mirror
+  // it locally verbatim (no merging, which is what caused duplicate/resurrected
+  // entries), then re-apply borders and refresh the jump toast so the change
+  // shows up here without a manual reload.
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "sync") return;
       if (!changes[STORAGE_KEY]) return;
       try {
         const next = changes[STORAGE_KEY].newValue;
+        // Overwrite the mirror to exactly match sync (including an empty object
+        // from a deliberate clear). Only skip when sync's key was removed
+        // entirely (newValue undefined), leaving the mirror as the backup.
         if (next !== undefined) {
           chrome.storage.local.set({ [STORAGE_KEY]: next }, () => {
             void chrome.runtime.lastError;

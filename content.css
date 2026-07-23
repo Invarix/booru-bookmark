@@ -141,6 +141,25 @@
   border-color: rgba(160, 160, 255, 0.5) !important;
 }
 
+/* Syncing state: shown while bookmarks may still be arriving from another
+   device. Non-clickable in effect (the handler ignores clicks), so present it
+   as muted with a wait cursor and a gentle pulse to read as "in progress". */
+#booru-bookmark-jump-toast.syncing {
+  background: #16213e !important;
+  color: #9aa0c0 !important;
+  border-color: rgba(120, 120, 255, 0.25) !important;
+  cursor: progress !important;
+  animation: booru-bm-sync-pulse 1.4s ease-in-out infinite !important;
+}
+#booru-bookmark-jump-toast.syncing:hover {
+  background: #16213e !important;
+  border-color: rgba(120, 120, 255, 0.25) !important;
+}
+@keyframes booru-bm-sync-pulse {
+  0%, 100% { opacity: 0.72 !important; }
+  50%      { opacity: 1 !important; }
+}
+
 /* Persistent error toast shown above the Navigate Bookmarks button when a
    bookmarked post can't be found (e.g. deleted). Red, dismissible by click. */
 #booru-bookmark-error-toast {
